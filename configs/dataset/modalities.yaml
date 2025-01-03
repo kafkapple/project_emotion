@@ -1,0 +1,14 @@
+modalities:
+  audio:
+    datasets:
+      - name: "ravdess"
+        format: "wav"
+        sampling_rate: 16000
+        channels: 1
+    
+  image:
+    datasets:
+      - name: "fer2013"
+        format: "npy"
+        channels: 1
+        size: 48 

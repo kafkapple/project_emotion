@@ -1,0 +1,33 @@
+modalities:
+  audio:
+    models:
+      - name: "wav2vec"
+        input_shape: [1, 16000]  # [channels, sequence_length]
+        compatible_datasets: ["ravdess"]
+        config_file: "wav2vec.yaml"
+      - name: "hubert"
+        input_shape: [1, 16000]
+        compatible_datasets: ["ravdess"]
+        config_file: "hubert.yaml"
+        
+  image:
+    models:
+      - name: "resnet"
+        input_shape: [1, 48, 48]  # [channels, height, width]
+        compatible_datasets: ["fer2013"]
+        config_file: "resnet.yaml"
+      - name: "efficientnet"
+        input_shape: [1, 48, 48]
+        compatible_datasets: ["fer2013"]
+        config_file: "efficientnet.yaml"
+        
+  multimodal:
+    models:
+      - name: "llava_emotion"
+        compatible_datasets: ["fer2013"]
+        modalities: ["image", "text"]
+        config_file: "llava_emotion.yaml"
+      - name: "llm_emotion"
+        compatible_datasets: ["ravdess", "fer2013"]
+        modalities: ["text"]
+        config_file: "emotion_llama.yaml" 
