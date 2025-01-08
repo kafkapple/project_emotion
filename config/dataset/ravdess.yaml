@@ -50,3 +50,23 @@ seed: 42  # random seed
 # K-Fold 설정 (split_method가 "kfold"일 때 사용)
 k_folds: 5
 current_fold: 0
+
+# 필터링 설정 추가
+filtering:
+  enabled: true
+  speech_only: true # 음성만 포함. song 제외
+  emotions: null  # 모든 감정 포함
+  exclude_emotions: ["neutral"]  # neutral 감정 제외
+  emotion_intensity: null #[1, 2]  # 감정 강도 1, 2만 포함
+  gender: null  # 모든 성별 포함
+
+# 통계 설정
+statistics:
+  enabled: true
+  save_path: "statistics"
+  plot_distributions: true
+
+filters:
+  emotion_intensity: [1, 2]  # 1: normal, 2: strong
+  statement: [1, 2]         # 1: "Kids are talking by the door", 2: "Dogs are sitting by the door"
+  vocal_channel: [1, 2]     # 1: speech, 2: song

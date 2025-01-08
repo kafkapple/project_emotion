@@ -6,6 +6,7 @@ import logging
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from src.metrics.audio_metrics import AudioEmotionMetrics
+from sklearn.metrics import f1_score
 
 class Wav2VecEmotionModel(pl.LightningModule):
     def __init__(self, config: Dict[str, Any]):
@@ -17,7 +18,7 @@ class Wav2VecEmotionModel(pl.LightningModule):
         if hasattr(config.model, 'matmul_precision'):
             torch.set_float32_matmul_precision(config.model.matmul_precision)
         
-        # Wav2Vec2 모델 초기화 (경고 무시 옵션 추가)
+        # Wav2Vec2 모델 초기화
         self.wav2vec = Wav2Vec2Model.from_pretrained(
             config.model.pretrained,
             ignore_mismatched_sizes=config.model.ignore_unused_weights
@@ -41,22 +42,22 @@ class Wav2VecEmotionModel(pl.LightningModule):
             self._freeze_layers()
         
         # 메트릭스 초기화
-        self.train_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
-        self.val_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
-        self.test_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
+        self.train_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
+        self.val_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
+        self.test_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         
-        # Debug 모드일 때만 모델 구조 출력
-        if config.debug.enabled:
-            logging.info("\nModel Architecture:")
-            logging.info(f"{'='*50}")
-            logging.info(f"{self}")
-            logging.info(f"{'='*50}\n")
-            
-            # 파라미터 수 출력
-            total_params = sum(p.numel() for p in self.parameters())
-            trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-            logging.info(f"Total parameters: {total_params:,}")
-            logging.info(f"Trainable parameters: {trainable_params:,}\n")
+        # Debug 모드 출력 주석 처리
+        # if config.debug.enabled:
+        #     logging.info("\nModel Architecture:")
+        #     logging.info(f"{'='*50}")
+        #     logging.info(f"{self}")
+        #     logging.info(f"{'='*50}\n")
+        #     
+        #     # 파라미� 수 출력
+        #     total_params = sum(p.numel() for p in self.parameters())
+        #     trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        #     logging.info(f"Total parameters: {total_params:,}")
+        #     logging.info(f"Trainable parameters: {trainable_params:,}\n")
     
     def _freeze_layers(self):
         """레이어 고정 설정"""
@@ -142,26 +143,41 @@ class Wav2VecEmotionModel(pl.LightningModule):
         outputs = self(batch)
         loss = F.cross_entropy(outputs, batch["label"])
         self.test_metrics.update(outputs, batch["label"])
+        
+        # loss와 함께 다른 메트릭도 로깅
         self.log("test_loss", loss, prog_bar=True)
+        
+        # 배치별 f1 score 계산 및 로깅 (선택사항)
+        with torch.no_grad():
+            preds = torch.argmax(outputs, dim=1)
+            f1 = f1_score(batch["label"].cpu(), preds.cpu(), average='macro')
+            self.log("test_batch_f1", f1, prog_bar=True)
+        
         return loss
     
     def on_train_epoch_end(self):
         metrics = self.train_metrics.compute(prefix="train_")
+        for name, value in metrics.items():
+            self.log(name, value, prog_bar=True)
         self.train_metrics.reset()
         
     def on_validation_epoch_end(self):
         metrics = self.val_metrics.compute(prefix="val_")
+        for name, value in metrics.items():
+            self.log(name, value, prog_bar=True)
         self.val_metrics.reset()
         
     def on_test_epoch_end(self):
         metrics = self.test_metrics.compute(prefix="test_")
         
-        # 메트릭 로깅
+        # 모든 메트릭 로깅
         for name, value in metrics.items():
-            self.log(name, value)
-            
+            self.log(name, value, prog_bar=True)
+        
         self.test_metrics.reset()
-        return metrics
+        
+        # config에 설정된 메트릭 반환
+        return self.test_metrics.get_test_results(metrics)
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -169,6 +185,15 @@ class Wav2VecEmotionModel(pl.LightningModule):
             lr=self.config.train.learning_rate
         )
         return optimizer
+    
+    def on_train_epoch_start(self):
+        self.train_metrics.set_epoch(self.current_epoch)
+
+    def on_validation_epoch_start(self):
+        self.val_metrics.set_epoch(self.current_epoch)
+
+    def on_test_epoch_start(self):
+        self.test_metrics.set_epoch(self.current_epoch)
     
 # num_unfrozen_layers: 0일 때는 embedding만 사용 (모든 레이어 고정)
 # num_unfrozen_layers: N일 때는 상위 N개 레이어만 학습

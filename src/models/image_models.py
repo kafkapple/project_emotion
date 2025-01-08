@@ -115,9 +115,14 @@ class PretrainedImageModel(pl.LightningModule):
         logging.info(f"Frozen parameters: {total_params - trainable_params:,}\n")
     
     def forward(self, batch):
-        x = batch["image"]
-        features = self.model(x)
-        return self.classifier(features)
+        # 메모리 최화를 위한 배치 처리
+        with torch.cuda.amp.autocast():  # mixed precision 사용
+            images = batch['image']
+            features = self.model(images)
+            if isinstance(features, tuple):
+                features = features[0]
+            features = features.view(features.size(0), -1)
+            return self.classifier(features)
     
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
@@ -158,9 +163,24 @@ class PretrainedImageModel(pl.LightningModule):
     def on_test_epoch_end(self):
         metrics = self.test_metrics.compute(prefix="test_")
         
-        # 메트릭 로깅
+        # 모든 메트� 로깅
         for name, value in metrics.items():
-            self.log(name, value)
-            
+            self.log(name, value, prog_bar=True)
+        
         self.test_metrics.reset()
-        return metrics 
+        
+        # test_loss 대신 f1 score �환
+        return {
+            "test_macro_f1": metrics["test_macro_f1"],
+            "test_weighted_f1": metrics["test_weighted_f1"],
+            "test_accuracy": metrics["test_accuracy"]
+        }
+    
+    def on_train_epoch_start(self):
+        self.train_metrics.set_epoch(self.current_epoch)
+    
+    def on_validation_epoch_start(self):
+        self.val_metrics.set_epoch(self.current_epoch)
+    
+    def on_test_epoch_start(self):
+        self.test_metrics.set_epoch(self.current_epoch) 

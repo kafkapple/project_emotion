@@ -1,0 +1,26 @@
+train:
+  metrics:
+    - accuracy
+    - macro_f1
+    # - weighted_f1
+    # - macro_precision
+    # - macro_recall
+
+val:
+  metrics:
+    - accuracy
+    - macro_f1
+    # - weighted_f1
+    # - macro_precision
+    # - macro_recall
+
+test:
+  metrics:
+    - accuracy
+    - macro_f1
+    # - weighted_f1
+  
+  main_metric: macro_f1  # 주 메트릭을 weighted_f1으로 변경
+  monitor_metrics:  # 모니터링할 메트릭 변경
+    - macro_f1
+    - accuracy 

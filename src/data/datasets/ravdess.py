@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import torchaudio
 import torch
@@ -9,6 +9,7 @@ import librosa
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import KFold
+from src.data.utils.dataset_filter import RavdessFilter
 
 class RavdessDataset(BaseDataset):
     def __init__(self, config: Dict[str, Any], split: str = 'train'):
@@ -24,11 +25,33 @@ class RavdessDataset(BaseDataset):
         self.feature_type = config.dataset.audio.feature_type
         self.n_mfcc = config.dataset.audio.n_mfcc
         self.augmentation = config.dataset.augmentation
-        self.class_names = config.dataset.class_names
+        
+        # 클래스 정보 초기화
+        self.original_class_names = list(config.dataset.class_names)
+        self.class_names = self._get_filtered_class_names()
+        self.num_classes = len(self.class_names)
         
         # 데이터셋 메타데이터 로드
         self.samples = self._load_samples()
         
+    def _get_filtered_class_names(self) -> List[str]:
+        """필터링을 적용한 실제 클래스 이름 목록 반환"""
+        filtered_names = self.original_class_names.copy()
+        
+        # filtering 설정이 있는 경우
+        if hasattr(self.config.dataset, 'filtering') and self.config.dataset.filtering.enabled:
+            # 제외할 감정이 지정된 경우
+            if self.config.dataset.filtering.exclude_emotions:
+                filtered_names = [name for name in filtered_names 
+                                if name not in self.config.dataset.filtering.exclude_emotions]
+            
+            # 포함할 감정이 지정된 경우
+            if self.config.dataset.filtering.emotions:
+                filtered_names = [name for name in filtered_names 
+                                if name in self.config.dataset.filtering.emotions]
+        
+        return filtered_names
+    
     def _check_dataset(self) -> bool:
         """데이터셋이 올바르게 다운로드되었는지 확인"""
         if not self.root_dir.exists():
@@ -170,7 +193,7 @@ class RavdessDataset(BaseDataset):
         """데이터셋 샘플 로드 및 분할"""
         metadata_path = self.root_dir / "ravdess_metadata.csv"
         
-        # 기본 메타데이터 로드/생성
+        # 기본 메타데데이터 로드/생성
         if not metadata_path.exists():
             success = DatasetDownloader._generate_ravdess_metadata(self.root_dir)
             if not success:
@@ -179,41 +202,27 @@ class RavdessDataset(BaseDataset):
         # 메타데이터 로드
         df = pd.read_csv(metadata_path)
         
-        # 감정 필터링
+        # 필터링된 클래스만 포함
         df = df[df['emotion'].isin(self.class_names)]
+        
+        # 레이블 재매핑
+        df['label'] = df['emotion'].map({name: idx for idx, name in enumerate(self.class_names)})
+        
+        # 추가 필터링 적용
+        if hasattr(self.config.dataset, 'filtering') and self.config.dataset.filtering.enabled:
+            if self.config.dataset.filtering.speech_only:
+                df = df[df['vocal_channel'] == 1]  # 1: speech
+            if self.config.dataset.filtering.emotion_intensity:
+                df = df[df['emotion_intensity'].isin(self.config.dataset.filtering.emotion_intensity)]
+            if self.config.dataset.filtering.gender:
+                df = df[df['gender'].isin(self.config.dataset.filtering.gender)]
         
         # Split 적용
         df_split = self._apply_split(df)
-        
-        # split 매핑 확인
-        split_map = {
-            'train': self.config.dataset.splits.train,
-            'val': self.config.dataset.splits.val,
-            'test': self.config.dataset.splits.test
-        }
-        
-        if self.split not in split_map:
-            raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_map.keys())}")
-        
-        target_split = split_map[self.split]
+        target_split = self.config.dataset.splits[self.split]
         samples = df_split[df_split['split'] == target_split]
         
-        # 디버깅을 위한 로깅 추가
-        logging.info(f"Total samples: {len(df)}")
-        logging.info(f"Split distribution:")
-        for split_name, count in df_split['split'].value_counts().items():
-            logging.info(f"  {split_name}: {count} samples")
-        logging.info(f"Selected split '{self.split}' (mapped to '{target_split}')")
-        logging.info(f"Found {len(samples)} samples for {self.split} split")
-        
-        if len(samples) == 0:
-            available_splits = df_split['split'].unique()
-            raise ValueError(
-                f"No samples found for {self.split} split (mapped to '{target_split}'). "
-                f"Available splits: {available_splits}"
-            )
-        
-        return samples.copy()
+        return samples
         
     def __len__(self):
         return len(self.samples)
@@ -367,4 +376,44 @@ class RavdessDataset(BaseDataset):
             waveform = waveform * gain
         
         return waveform
+
+    @classmethod
+    def create_filtered_dataset(cls, 
+                              config: Dict,
+                              split: str,
+                              speech_only: bool = True,
+                              emotions: Optional[List[str]] = None,
+                              exclude_emotions: Optional[List[str]] = None,
+                              emotion_intensity: Optional[List[int]] = None,
+                              gender: Optional[List[str]] = None) -> 'RavdessDataset':
+        """필터링된 RAVDESS 데이터셋 생성"""
+        
+        # 메타데이터 파일 경로
+        metadata_path = Path(config.dataset.root_dir) / "ravdess_metadata.csv"
+        
+        # 필터 객체 생성
+        filter_obj = RavdessFilter(metadata_path)
+        
+        # 데이터 필터링
+        filtered_df = filter_obj.filter_dataset(
+            speech_only=speech_only,
+            emotions=emotions,
+            exclude_emotions=exclude_emotions,
+            emotion_intensity=emotion_intensity,
+            gender=gender
+        )
+        
+        # 통계 생성 및 저장
+        stats = filter_obj.generate_statistics(filtered_df)
+        filter_obj.print_statistics(stats)
+        
+        # 통계 저장
+        stats_path = Path(config.dataset.root_dir) / f"statistics_{split}.json"
+        filter_obj.save_statistics(stats_path, stats)
+        
+        # 필터링된 데이터셋으로 새로운 인스턴스 생성
+        dataset = cls(config, split)
+        dataset.samples = filtered_df
+        
+        return dataset
 

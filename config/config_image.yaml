@@ -1,7 +1,7 @@
 defaults:
   - dataset: fer2013 #
-  - model: resnet #
-  - train: train #
+  - model: efficientnet #
+  - train: train
   - _self_
 
 debug:

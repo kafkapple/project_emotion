@@ -1,8 +1,9 @@
 defaults:
-  - dataset: ravdess #
-  - model: wav2vec
-  - train: train
   - _self_
+  - train: train
+  - model: wav2vec
+  - dataset: ravdess
+  - metrics: metrics
 
 debug:
   enabled: false
