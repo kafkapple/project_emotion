@@ -13,7 +13,7 @@ class PretrainedImageModel(pl.LightningModule):
         self.save_hyperparameters()
         self.config = config
         
-        # 모델 아키텍처 선택 및 초기화
+        # 모델 ��기화
         self.model = self._init_model()
         
         # 분류기 초기화
@@ -24,12 +24,13 @@ class PretrainedImageModel(pl.LightningModule):
             self._freeze_layers()
         
         # 메트릭스 초기화
-        self.train_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
-        self.val_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
-        self.test_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names)
+        self.train_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
+        self.val_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
+        self.test_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         
-        if config.debug.enabled:
-            self._log_model_info()
+        # Debug 모드 출력 주석 처리
+        # if config.debug.enabled:
+        #     self._log_model_info()
     
     def _init_model(self):
         """모델 초기화"""
@@ -163,13 +164,13 @@ class PretrainedImageModel(pl.LightningModule):
     def on_test_epoch_end(self):
         metrics = self.test_metrics.compute(prefix="test_")
         
-        # 모든 메트� 로깅
+        # 모든 메트릭스 로깅
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
         
         self.test_metrics.reset()
         
-        # test_loss 대신 f1 score �환
+        # test_loss 대신 f1 score 반환
         return {
             "test_macro_f1": metrics["test_macro_f1"],
             "test_weighted_f1": metrics["test_weighted_f1"],

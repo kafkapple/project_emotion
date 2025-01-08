@@ -17,11 +17,18 @@ augmentation:
   enabled: true
   noise:
     enabled: true
-    noise_level: 0.005  # 노이즈 강도 (0 ~ 1)
+    noise_level: 0.008  # 0.005 -> 0.008
   volume:
     enabled: true
-    min_gain: 0.8      # 최소 볼륨 배수
-    max_gain: 1.2      # 최대 볼륨 배수
+    min_gain: 0.75     # 0.8 -> 0.75
+    max_gain: 1.25     # 1.2 -> 1.25
+  pitch_shift:
+    enabled: true
+    min_semitones: -1  # 작은 범위로
+    max_semitones: 1
+  time_mask:
+    enabled: true
+    max_mask_size: 100
 
 num_classes: 8
 class_names: [
@@ -40,25 +47,25 @@ splits:
   val: "validation"
   test: "test"
   ratios:
-    train: 0.7
+    train: 0.75
     val: 0.15
-    test: 0.15
-  
-split_method: "random"  # or "kfold"
+    test: 0.10
+  k_folds: 5      # kfold/stratified split용
+  current_fold: 0
+
+# splits 섹션 밖으로 이동
+split_method: "kfold"  # random -> stratified
+stratify: true
 seed: 42  # random seed
 
-# K-Fold 설정 (split_method가 "kfold"일 때 사용)
-k_folds: 5
-current_fold: 0
-
-# 필터링 설정 추가
+# 필터링 설정
 filtering:
   enabled: true
   speech_only: true # 음성만 포함. song 제외
-  emotions: null  # 모든 감정 포함
-  exclude_emotions: ["neutral"]  # neutral 감정 제외
-  emotion_intensity: null #[1, 2]  # 감정 강도 1, 2만 포함
-  gender: null  # 모든 성별 포함
+  emotions: null     # 모든 감정 포함
+  exclude_emotions: null  # ["neutral"]  # neutral 감정 제외
+  emotion_intensity: null # [1, 2]  # 감정 강도 1, 2만 포함
+  gender: null       # 모든 성별 포함
 
 # 통계 설정
 statistics:

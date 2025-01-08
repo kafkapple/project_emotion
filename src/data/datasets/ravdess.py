@@ -8,7 +8,7 @@ import logging
 import librosa
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import KFold
+from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from src.data.utils.dataset_filter import RavdessFilter
 
 class RavdessDataset(BaseDataset):
@@ -26,32 +26,32 @@ class RavdessDataset(BaseDataset):
         self.n_mfcc = config.dataset.audio.n_mfcc
         self.augmentation = config.dataset.augmentation
         
-        # 클래스 정보 초기화
+        # 클래스 정보 초기화 (필터링 적용)
         self.original_class_names = list(config.dataset.class_names)
         self.class_names = self._get_filtered_class_names()
         self.num_classes = len(self.class_names)
         
-        # 데이터셋 메타데이터 로드
-        self.samples = self._load_samples()
+        # 데이터셋 로드 및 필터링
+        self.samples = self._load_dataset()
         
+        # config 업데이트 - 실제 사용되는 클래스 정보로 갱신
+        self.config.dataset.class_names = self.class_names
+        self.config.dataset.num_classes = self.num_classes
+
     def _get_filtered_class_names(self) -> List[str]:
-        """필터링을 적용한 실제 클래스 이름 목록 반환"""
-        filtered_names = self.original_class_names.copy()
+        """필터링이 적용된 클래스 이름 목록 반환"""
+        class_names = self.original_class_names.copy()
         
-        # filtering 설정이 있는 경우
         if hasattr(self.config.dataset, 'filtering') and self.config.dataset.filtering.enabled:
-            # 제외할 감정이 지정된 경우
             if self.config.dataset.filtering.exclude_emotions:
-                filtered_names = [name for name in filtered_names 
-                                if name not in self.config.dataset.filtering.exclude_emotions]
-            
-            # 포함할 감정이 지정된 경우
+                class_names = [name for name in class_names 
+                             if name not in self.config.dataset.filtering.exclude_emotions]
             if self.config.dataset.filtering.emotions:
-                filtered_names = [name for name in filtered_names 
-                                if name in self.config.dataset.filtering.emotions]
+                class_names = [name for name in class_names 
+                             if name in self.config.dataset.filtering.emotions]
         
-        return filtered_names
-    
+        return class_names
+
     def _check_dataset(self) -> bool:
         """데이터셋이 올바르게 다운로드되었는지 확인"""
         if not self.root_dir.exists():
@@ -72,92 +72,43 @@ class RavdessDataset(BaseDataset):
         return True
         
     def _apply_split(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Config 설정에 따라 데이터 분할 적용"""
-        split_method = self.config.dataset.get('split_method', 'random')  # 기본값은 random
+        """이터셋 분할 적용"""
+        df_split = df.copy()
         
-        if split_method == 'random':
-            return self._apply_random_split(df)
-        elif split_method == 'kfold':
-            return self._apply_kfold_split(df)
+        if self.config.dataset.split_method == "random":
+            return self._apply_random_split(df_split)
+        elif self.config.dataset.split_method == "kfold":
+            return self._apply_kfold_split(df_split)
+        elif self.config.dataset.split_method == "stratified":
+            return self._apply_stratified_split(df_split)
         else:
-            raise ValueError(f"Unknown split method: {split_method}")
+            raise ValueError(f"Unknown split method: {self.config.dataset.split_method}")
 
     def _apply_random_split(self, df: pd.DataFrame) -> pd.DataFrame:
-        """랜덤 분할 적용"""
-        # 데이터셋 정보 출력
-        logging.info("\nSplit Information:")
-        logging.info(f"Total samples before split: {len(df)}")
+        """랜덤 분할"""
+        # Train-Test 분할
+        train_val_df, test_df = train_test_split(
+            df,
+            test_size=self.config.dataset.splits.ratios.test,
+            random_state=self.config.dataset.seed,
+            stratify=df['emotion'] if self.config.dataset.splits.get('stratify', True) else None
+        )
         
-        # Actor 기준 분할
-        actors = np.array(sorted(df['actor'].unique()))
-        n_actors = len(actors)
-        logging.info(f"Total number of actors: {n_actors}")
+        # Train-Val 분할
+        val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
+        train_df, val_df = train_test_split(
+            train_val_df,
+            test_size=val_ratio,
+            random_state=self.config.dataset.seed,
+            stratify=train_val_df['emotion'] if self.config.dataset.splits.get('stratify', True) else None
+        )
         
-        # 각 actor의 샘플 수 확인
-        actor_counts = df.groupby('actor').size()
-        logging.info("\nSamples per actor:")
-        logging.info(f"\n{actor_counts}")
+        # Split 정보 추가
+        df.loc[train_df.index, 'split'] = self.config.dataset.splits.train
+        df.loc[val_df.index, 'split'] = self.config.dataset.splits.val
+        df.loc[test_df.index, 'split'] = self.config.dataset.splits.test
         
-        np.random.seed(self.config.dataset.seed)
-        np.random.shuffle(actors)
-        
-        train_ratio = float(self.config.dataset.splits.ratios.train)
-        val_ratio = float(self.config.dataset.splits.ratios.val)
-        
-        # 최소 1개 이상의 actor 보장
-        train_idx = max(1, int(train_ratio * n_actors))
-        val_idx = max(train_idx + 1, int((train_ratio + val_ratio) * n_actors))
-        
-        # 인덱스 범위 검증
-        if val_idx >= n_actors:
-            val_idx = n_actors - 1
-        
-        train_actors = actors[:train_idx]
-        val_actors = actors[train_idx:val_idx]
-        test_actors = actors[val_idx:]
-        
-        # 임시 데이터프레임에 split 정보 추가
-        df_split = df.copy()
-        df_split['split'] = self.config.dataset.splits.train
-        df_split.loc[df_split['actor'].isin(val_actors), 'split'] = self.config.dataset.splits.val
-        df_split.loc[df_split['actor'].isin(test_actors), 'split'] = self.config.dataset.splits.test
-        
-        # 분할 결과 검증 및 로깅
-        split_info = df_split.groupby('split').agg({
-            'actor': lambda x: sorted(x.unique()),
-            'emotion': lambda x: dict(x.value_counts())
-        }).reset_index()
-        
-        logging.info("\nSplit details:")
-        for _, row in split_info.iterrows():
-            split = row['split']
-            actors = row['actor']
-            emotions = row['emotion']
-            n_samples = sum(emotions.values())
-            
-            logging.info(f"\n{split}:")
-            logging.info(f"  Actors ({len(actors)}): {actors}")
-            logging.info(f"  Total samples: {n_samples}")
-            logging.info("  Emotion distribution:")
-            for emotion, count in emotions.items():
-                logging.info(f"    {emotion}: {count}")
-            
-        # 각 분할의 샘플 수 확인
-        split_counts = df_split.groupby('split').size()
-        total_samples = len(df_split)
-        
-        logging.info("\nFinal split distribution:")
-        for split_name, count in split_counts.items():
-            percentage = (count/total_samples) * 100
-            logging.info(f"  {split_name}: {count} samples ({percentage:.1f}%)")
-        
-        # 분할 결과 검증
-        if 0 in split_counts.values:
-            logging.warning("Warning: Some splits have no samples!")
-            available_splits = df_split['split'].unique()
-            logging.warning(f"Available splits: {available_splits}")
-        
-        return df_split
+        return df
 
     def _apply_kfold_split(self, df: pd.DataFrame) -> pd.DataFrame:
         """K-Fold 분할 적용"""
@@ -189,24 +140,60 @@ class RavdessDataset(BaseDataset):
                 
         raise ValueError(f"Invalid fold number: {fold}")
 
-    def _load_samples(self) -> pd.DataFrame:
-        """데이터셋 샘플 로드 및 분할"""
+    def _apply_stratified_split(self, df: pd.DataFrame) -> pd.DataFrame:
+        """계층적 K-Fold 분할"""
+        # 먼저 train+val과 test로 분할
+        train_val_df, test_df = train_test_split(
+            df,
+            test_size=self.config.dataset.splits.ratios.test,
+            random_state=self.config.dataset.seed,
+            stratify=df['emotion']
+        )
+        
+        # 그 다음 train과 val로 분할
+        # val_ratio를 train+val 기준으로 재계산
+        val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
+        train_df, val_df = train_test_split(
+            train_val_df,
+            test_size=val_ratio,
+            random_state=self.config.dataset.seed,
+            stratify=train_val_df['emotion']
+        )
+        
+        # Split 정보 추가
+        df_split = df.copy()
+        df_split['split'] = self.config.dataset.splits.train  # 기본값을 train으로
+        df_split.loc[val_df.index, 'split'] = self.config.dataset.splits.val
+        df_split.loc[test_df.index, 'split'] = self.config.dataset.splits.test
+        
+        # 각 분할의 클��스 분포 확인을 위한 로깅
+        logging.info("\nClass distribution in splits:")
+        for split_name, split_df in [
+            ("Train", train_df), 
+            ("Val", val_df), 
+            ("Test", test_df)
+        ]:
+            class_dist = split_df['emotion'].value_counts()
+            logging.info(f"\n{split_name} set class distribution:")
+            logging.info(class_dist)
+        
+        return df_split
+
+    def _load_dataset(self) -> pd.DataFrame:
+        """데이터셋 로드 및 필터링"""
         metadata_path = self.root_dir / "ravdess_metadata.csv"
         
-        # 기본 메타데데이터 로드/생성
         if not metadata_path.exists():
-            success = DatasetDownloader._generate_ravdess_metadata(self.root_dir)
-            if not success:
-                raise RuntimeError("Failed to generate metadata")
-        
-        # 메타데이터 로드
+            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+            
         df = pd.read_csv(metadata_path)
         
         # 필터링된 클래스만 포함
         df = df[df['emotion'].isin(self.class_names)]
         
-        # 레이블 재매핑
-        df['label'] = df['emotion'].map({name: idx for idx, name in enumerate(self.class_names)})
+        # 레이블 인덱스 재매핑
+        label_map = {name: idx for idx, name in enumerate(self.class_names)}
+        df['label'] = df['emotion'].map(label_map)
         
         # 추가 필터링 적용
         if hasattr(self.config.dataset, 'filtering') and self.config.dataset.filtering.enabled:

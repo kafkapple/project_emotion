@@ -1,0 +1,21 @@
+# 각 모달리티별 전용 모델 사용 추천
+models:
+  text:
+    name: "emotion-llama"
+    model_id: "ZebangCheng/Emotion-LLaMA"
+    type: "causal_lm"
+  
+  audio:
+    name: "wav2vec"
+    model_id: "facebook/wav2vec2-base"
+    type: "audio"
+  
+  image:
+    name: "efficientnet"
+    model_id: "efficientnet_b0"
+    type: "image"
+  
+  video:
+    name: "llava"
+    model_id: "llava-hf/LLaVA-NeXT-Video-7B-32K-hf"
+    type: "video" 

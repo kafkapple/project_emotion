@@ -8,8 +8,9 @@ matmul_precision: "medium"
 freeze:
   enabled: true
   num_unfrozen_layers: 2
+  layer_dropout: 0.1
 
 # 분류기 설정
 classifier:
   hidden_size: 512
-  dropout: 0.3
+  dropout: 0.4

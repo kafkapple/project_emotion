@@ -49,8 +49,8 @@ class ModelFactory:
         class_names = config.dataset.class_names
         
         if model_name in ["resnet", "efficientnet"]:
-            return ImageEmotionMetrics(num_classes, class_names)
+            return ImageEmotionMetrics(num_classes, class_names, config)
         elif model_name == "wav2vec":
-            return AudioEmotionMetrics(num_classes, class_names)
+            return AudioEmotionMetrics(num_classes, class_names, config)
         else:
             raise ValueError(f"Unknown model type: {model_name}")

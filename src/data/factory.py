@@ -37,31 +37,15 @@ class DataFactory:
             raise ValueError(f"Unknown dataset: {dataset_name}")
             
     @staticmethod
-    def create_dataloader(dataset: BaseDataset, config: DictConfig, split: str):
+    def create_dataloader(dataset, config: DictConfig, is_train: bool = False) -> DataLoader:
         """데이터로더 생성"""
-        # 기본 메모리 관리 설정
-        memory_settings = {
-            'pin_memory': False,
-            'persistent_workers': False,
-            'prefetch_factor': 2
-        }
-        
-        # config에서 메모리 ��리 설정이 있으면 업데이트
-        if hasattr(config.train, 'memory_management'):
-            memory_settings.update({
-                'pin_memory': config.train.memory_management.pin_memory,
-                'persistent_workers': config.train.memory_management.persistent_workers,
-                'prefetch_factor': config.train.memory_management.prefetch_factor
-            })
-        
-        # 데이터셋에 맞는 collate_fn 가져오기
-        collate_fn = get_collate_fn(config.dataset.name)
-        
         return DataLoader(
             dataset,
             batch_size=config.train.batch_size,
-            shuffle=(split == 'train'),
             num_workers=config.train.num_workers,
-            collate_fn=collate_fn,
-            **memory_settings
+            shuffle=is_train and config.train.dataloader.shuffle,
+            drop_last=is_train and config.train.dataloader.drop_last,
+            pin_memory=config.train.memory_management.pin_memory,
+            persistent_workers=config.train.memory_management.persistent_workers if config.train.num_workers > 0 else False,
+            prefetch_factor=config.train.memory_management.prefetch_factor if config.train.num_workers > 0 else None,
         )

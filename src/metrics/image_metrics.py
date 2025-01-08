@@ -1,8 +1,12 @@
-from typing import Dict
+from typing import Dict, List
+from omegaconf import DictConfig
 from .base_metrics import BaseEmotionMetrics
 import logging
 
 class ImageEmotionMetrics(BaseEmotionMetrics):
+    def __init__(self, num_classes: int, class_names: List[str], config: DictConfig):
+        super().__init__(num_classes, class_names, config)
+
     def compute(self, prefix: str = "") -> Dict[str, float]:
         """이미지 특화 메트릭 계산"""
         metrics = super().compute(prefix)

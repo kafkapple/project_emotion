@@ -53,7 +53,7 @@ class Wav2VecEmotionModel(pl.LightningModule):
         #     logging.info(f"{self}")
         #     logging.info(f"{'='*50}\n")
         #     
-        #     # 파라미� 수 출력
+        #     # 파라미터 수 출력
         #     total_params = sum(p.numel() for p in self.parameters())
         #     trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         #     logging.info(f"Total parameters: {total_params:,}")
@@ -188,6 +188,7 @@ class Wav2VecEmotionModel(pl.LightningModule):
     
     def on_train_epoch_start(self):
         self.train_metrics.set_epoch(self.current_epoch)
+        logging.info(f"\nStarting Epoch {self.current_epoch}/{self.trainer.max_epochs}")
 
     def on_validation_epoch_start(self):
         self.val_metrics.set_epoch(self.current_epoch)

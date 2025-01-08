@@ -10,6 +10,7 @@ import wandb
 from datetime import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
+from typing import Dict
 
 class ExperimentManager:
     def __init__(self, config: DictConfig):

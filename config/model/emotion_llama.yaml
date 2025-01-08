@@ -3,4 +3,7 @@ name: "emotion_llama"
 pretrained: "ZebangCheng/Emotion-LLaMA"
 max_length: 512
 temperature: 0.7
-num_classes: 7
+
+
+# 기본적으로 텍스트 기반 감정 분석에 특화된 LLaMA 모델
+# 멀티모달 입력은 지원하지 않음 (텍스트만 가능)

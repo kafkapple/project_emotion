@@ -53,6 +53,17 @@ class BaseEmotionMetrics:
     def compute(self, prefix: str = "") -> Dict[str, float]:
         """메트릭 계산 및 반환"""
         # Classification Report 생성
+        report = classification_report(
+            self.all_labels, 
+            self.all_preds,
+            target_names=self._get_active_class_names(),
+            zero_division=0
+        )
+        
+        # 콘솔에 출�
+        phase = prefix.replace('_', '') if prefix else 'eval'
+        logging.info(f"\n{phase.upper()} Epoch {self.current_epoch} Classification Report:\n{report}")
+        
         report_dict = classification_report(
             self.all_labels, 
             self.all_preds,
@@ -61,19 +72,38 @@ class BaseEmotionMetrics:
             output_dict=True
         )
         
-        # 주요 메트릭 추출
-        metrics = {
-            f"{prefix}accuracy": report_dict['accuracy'],
-            f"{prefix}macro_precision": report_dict['macro avg']['precision'],
-            f"{prefix}macro_recall": report_dict['macro avg']['recall'],
-            f"{prefix}macro_f1": report_dict['macro avg']['f1-score'],
-            f"{prefix}weighted_f1": report_dict['weighted avg']['f1-score']
+        # 기본 메트릭 매핑
+        metric_mapping = {
+            'accuracy': report_dict['accuracy'],
+            'macro_f1': report_dict['macro avg']['f1-score'],
+            'weighted_f1': report_dict['weighted avg']['f1-score'],
+            'macro_precision': report_dict['macro avg']['precision'],
+            'macro_recall': report_dict['macro avg']['recall']
         }
         
-        # 메트릭 로깅 및 저장
-        self.log_metrics(prefix.replace('_', '') if prefix else 'eval')
+        # config에 설정된 메��릭만 선택 (안전하게 처리)
+        phase = prefix.replace('_', '') if prefix else 'eval'
+        selected_metrics = {}
         
-        return metrics
+        try:
+            if hasattr(self.config, 'metrics') and phase in self.config.metrics:
+                phase_config = self.config.metrics[phase]
+                if hasattr(phase_config, 'metrics'):
+                    for metric in phase_config.metrics:
+                        if metric in metric_mapping:
+                            selected_metrics[f"{prefix}{metric}"] = metric_mapping[metric]
+                else:
+                    selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+            else:
+                selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+        except Exception as e:
+            logging.warning(f"Error in metrics computation: {e}. Using all metrics.")
+            selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+        
+        # 메트릭 로깅 및 저장
+        self.log_metrics(phase)
+        
+        return selected_metrics
 
     def log_metrics(self, phase: str):
         """모든 메트릭 로깅"""
@@ -215,9 +245,19 @@ class BaseEmotionMetrics:
 
     def get_test_results(self, metrics_dict: Dict) -> Dict:
         """테스트 결과로 반환할 메트릭 선택"""
+        if not hasattr(self.config.metrics.test, 'monitor_metrics'):
+            return metrics_dict
+        
         results = {}
         for metric in self.config.metrics.test.monitor_metrics:
             key = f"test_{metric}"
             if key in metrics_dict:
                 results[key] = metrics_dict[key]
+            
+        # 주 메트릭이 설정되어 있으면 추가
+        if hasattr(self.config.metrics.test, 'main_metric'):
+            main_key = f"test_{self.config.metrics.test.main_metric}"
+            if main_key in metrics_dict:
+                results['test_score'] = metrics_dict[main_key]
+            
         return results 
