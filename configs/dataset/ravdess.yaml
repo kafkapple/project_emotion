@@ -1,16 +1,17 @@
 name: "ravdess"
 root_dir: "data/ravdess"
- 
+
+# 기본 설정
+seed: 42  # 랜덤 시드 추가
+
+# 오디오 설정
 audio:
-  sample_rate: 16000  # wav2vec2 기본 샘플링 레이트
-  num_channels: 1     # 모노 오디오
-  duration: 5.0      # 오디오 길이
-  normalize: true    # 오디오 정규화
-  max_length: 10    # 최대 길이 (초)
+  sample_rate: 16000
+  duration: 3.0
+  max_length: 48000  # duration * sample_rate
+  normalize: true
 
-text:
-  max_length: 128
-
+# Augmentation 설정
 augmentation:
   enabled: true
   balance_ratio: 1.0  # 최대 클래스 대비 목표 비율
@@ -23,13 +24,14 @@ augmentation:
     min_gain: 0.75
     max_gain: 1.25
   pitch_shift:
-    enabled: true
+    enabled: false
     min_semitones: -1
     max_semitones: 1
   time_mask:
-    enabled: true
+    enabled: false
     max_mask_size: 100
 
+# 클래스 설정
 num_classes: 8
 class_names: [
   "neutral",
@@ -42,34 +44,38 @@ class_names: [
   "surprised"
 ]
 
-# splits 섹션 안으로 이동
+# 클래스 밸런싱 설정
+balance:
+  enabled: true
+  method: "oversample"
+  target_size: "auto"
+
+# 클래스 가중치 설정
+class_weights:
+  mode: "manual"
+  manual_weights:
+    "neutral": 2.0
+    "calm": 1.0
+    "happy": 1.5
+    "sad": 1.5
+    "angry": 1.0
+    "fearful": 1.0
+    "disgust": 1.0
+    "surprised": 1.0
+
+# Split 설정
 splits:
-  method: "stratified"  # random, kfold, stratified 중 선택
-  k_folds: 5
-  current_fold: 0
-  stratify: true
+  method: "stratified"
   train: "train"
   val: "validation"
   test: "test"
   ratios:
-    train: 0.75
+    train: 0.7
     val: 0.15
-    test: 0.10
+    test: 0.15
 
-seed: 42  # random seed
-
-# 필터링 설정
-filtering:
-  enabled: true
-  speech_only: true  # 음성만 포함
-  emotions: null     # 모든 감정 포함
-  exclude_emotions: null
-  emotion_intensity: null #[1, 2]  # normal, strong
-  statement: null #[1, 2]  # 두 문장 모두 포함
-  gender: null       # 모든 성별 포함
-
-# 통계 설정
-statistics:
-  enabled: true
-  save_path: "statistics"
-  plot_distributions: true
+# 디버그 설정 추가
+debug:
+  enabled: false
+  log_shapes: false
+  log_values: false

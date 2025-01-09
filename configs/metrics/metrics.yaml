@@ -1,19 +1,9 @@
-train:
-  metrics:
-    - accuracy
-    - macro_f1
-
-val:
-  metrics:
-    - accuracy
-    - macro_f1
-
-test:
-  metrics:
-    - accuracy
-    - macro_f1
-  
-  main_metric: macro_f1
-  monitor_metrics:
-    - macro_f1
-    - accuracy 
+metrics:
+  train:
+    metrics: ["loss", "accuracy", "f1", "precision", "recall"]
+  val:
+    metrics: ["loss", "accuracy", "f1", "precision", "recall"]
+    monitor: "loss"
+  test:
+    metrics: ["loss", "accuracy", "f1", "precision", "recall"]
+    main_metric: "f1" 

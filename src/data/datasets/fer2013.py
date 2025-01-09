@@ -44,13 +44,16 @@ class FER2013Dataset(BaseDataset):
         split_name = self.split_map[self.split]
         df = df[df['Usage'] == split_name].copy()
         
-        # 레이블 확인
-        unique_labels = sorted(df['emotion'].unique())
-        if len(unique_labels) != self.config.dataset.num_classes:
-            raise ValueError(
-                f"Number of classes in data ({len(unique_labels)}) "
-                f"does not match config ({self.config.dataset.num_classes})"
-            )
+        # 클래스 분포 확인 및 로깅
+        class_dist = df['emotion'].value_counts()
+        logging.info(f"\n{split_name} set class distribution:")
+        for emotion_idx, count in class_dist.items():
+            emotion_name = self.config.dataset.class_names[emotion_idx]
+            logging.info(f"{emotion_name}: {count} ({count/len(df)*100:.2f}%)")
+        
+        # 클래스 밸런싱 적용 (train split에만)
+        if self.split == 'train' and self.config.dataset.balance.enabled:
+            df = self._balance_classes(df)
         
         # pixels 문자열을 numpy array로 변환
         df['pixels'] = df['pixels'].apply(lambda x: np.array([int(p) for p in x.split()]))
@@ -64,20 +67,108 @@ class FER2013Dataset(BaseDataset):
         """단일 샘플 반환"""
         sample = self.samples.iloc[idx]
         
-        # 이미지 변환
+        # 이미지 변환 및 augmentation
         image = sample['pixels'].reshape(48, 48).astype(np.float32)
         image = torch.from_numpy(image)
         image = image.unsqueeze(0)  # Add channel dimension
         
+        # Augmentation (train split에서만)
+        if self.split == 'train' and self.config.dataset.augmentation.enabled:
+            if sample['emotion'] == 6:  # neutral class
+                # neutral 클래스에 대해 더 강한 augmentation 적용
+                num_aug = self.config.dataset.augmentation.get('neutral_aug_factor', 2)
+                for _ in range(num_aug):
+                    if random.random() < 0.5:
+                        image = self._apply_random_rotation(image)
+                    if random.random() < 0.5:
+                        image = self._apply_random_noise(image)
+        
         # 정규화
         if self.config.dataset.image.normalize:
-            # [-1, 1] 범위로 정규화
             image = (image / 255.0 - self.config.dataset.image.mean[0]) / self.config.dataset.image.std[0]
         else:
-            # [0, 1] 범위로 정규화
             image = image / 255.0
             
         return {
             "image": image,
             "label": torch.tensor(sample['emotion'], dtype=torch.long)
         }
+
+    def _apply_random_rotation(self, image: torch.Tensor) -> torch.Tensor:
+        """랜덤 회전 적용"""
+        angle = random.uniform(-10, 10)
+        return TF.rotate(image, angle)
+
+    def _apply_random_noise(self, image: torch.Tensor) -> torch.Tensor:
+        """랜덤 노이즈 적용"""
+        noise = torch.randn_like(image) * 0.1
+        return torch.clamp(image + noise, 0, 1)
+
+    def calculate_class_weights(self) -> torch.Tensor:
+        """클래스별 가중치 계산"""
+        class_counts = self.samples['emotion'].value_counts().sort_index()
+        total_samples = len(self.samples)
+        
+        # 역수 가중치 계산
+        weights = torch.FloatTensor(len(class_counts))
+        for idx, count in enumerate(class_counts):
+            weights[idx] = total_samples / (len(class_counts) * count)
+        
+        return weights
+
+    def get_sampler(self):
+        """WeightedRandomSampler 생성"""
+        if not self.config.dataset.weighted_sampling.enabled:
+            return None
+        
+        # 각 샘플의 가중치 계산
+        class_weights = self.calculate_class_weights()
+        sample_weights = [class_weights[label] for label in self.samples['emotion']]
+        
+        # Sampler 생성
+        return torch.utils.data.WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+
+    def _balance_classes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """클래스 밸런싱 적용"""
+        balance_method = self.config.dataset.balance.method
+        target_size = self.config.dataset.balance.target_size
+        
+        if balance_method == "oversample":
+            # 오버샘플링
+            max_size = df['emotion'].value_counts().max() if target_size == "auto" else target_size
+            balanced_dfs = []
+            
+            for emotion in df['emotion'].unique():
+                emotion_df = df[df['emotion'] == emotion]
+                if len(emotion_df) < max_size:
+                    # 랜덤 오버샘플링
+                    resampled = emotion_df.sample(
+                        n=max_size, 
+                        replace=True, 
+                        random_state=self.config.dataset.seed
+                    )
+                    balanced_dfs.append(resampled)
+                else:
+                    balanced_dfs.append(emotion_df)
+                    
+            return pd.concat(balanced_dfs, ignore_index=True)
+            
+        elif balance_method == "undersample":
+            # 언더샘플링
+            min_size = df['emotion'].value_counts().min() if target_size == "auto" else target_size
+            balanced_dfs = []
+            
+            for emotion in df['emotion'].unique():
+                emotion_df = df[df['emotion'] == emotion]
+                resampled = emotion_df.sample(
+                    n=min_size, 
+                    replace=False, 
+                    random_state=self.config.dataset.seed
+                )
+                balanced_dfs.append(resampled)
+                
+            return pd.concat(balanced_dfs, ignore_index=True)

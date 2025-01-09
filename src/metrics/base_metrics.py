@@ -50,20 +50,28 @@ class BaseEmotionMetrics:
         unique_labels = self._get_unique_labels()
         return [self.class_names[i] for i in unique_labels]
     
-    def compute(self, prefix: str = "") -> Dict[str, float]:
-        """메트릭 계산 및 반환"""
-        # Classification Report 생성
-        report = classification_report(
-            self.all_labels, 
-            self.all_preds,
-            target_names=self._get_active_class_names(),
-            zero_division=0
-        )
+    def _normalize_phase(self, phase: str) -> str:
+        """phase 이름을 표준화"""
+        phase_map = {
+            'val': 'validation',
+            'validation': 'validation',
+            'eval': 'validation',
+            'train': 'train',
+            'test': 'test'
+        }
+        # 접두사 제거 (예: "train_", "validation/")
+        clean_phase = phase.rstrip('_/').lstrip('_/')
+        return phase_map.get(clean_phase, clean_phase)
+
+    def compute_metrics(self, prefix: str = "") -> Dict[str, float]:
+        """메트릭 계산만 수행 (로깅 없이)"""
+        # phase 이름 정규화
+        phase = self._normalize_phase(prefix.rstrip('_/'))
         
-        # 콘솔에 출�
-        phase = prefix.replace('_', '') if prefix else 'eval'
-        logging.info(f"\n{phase.upper()} Epoch {self.current_epoch} Classification Report:\n{report}")
+        # 표준화된 접두사 생성
+        standard_prefix = f"{phase}/"
         
+        # Classification Report 생성 (출력 없이 dict만 생성)
         report_dict = classification_report(
             self.all_labels, 
             self.all_preds,
@@ -81,44 +89,49 @@ class BaseEmotionMetrics:
             'macro_recall': report_dict['macro avg']['recall']
         }
         
-        # config에 설정된 메��릭만 선택 (안전하게 처리)
-        phase = prefix.replace('_', '') if prefix else 'eval'
+        # config에 설정된 메트릭만 선택
         selected_metrics = {}
-        
         try:
             if hasattr(self.config, 'metrics') and phase in self.config.metrics:
                 phase_config = self.config.metrics[phase]
                 if hasattr(phase_config, 'metrics'):
                     for metric in phase_config.metrics:
                         if metric in metric_mapping:
-                            selected_metrics[f"{prefix}{metric}"] = metric_mapping[metric]
+                            selected_metrics[f"{standard_prefix}{metric}"] = metric_mapping[metric]
                 else:
-                    selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+                    selected_metrics = {f"{standard_prefix}{k}": v for k, v in metric_mapping.items()}
             else:
-                selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+                selected_metrics = {f"{standard_prefix}{k}": v for k, v in metric_mapping.items()}
         except Exception as e:
             logging.warning(f"Error in metrics computation: {e}. Using all metrics.")
-            selected_metrics = {f"{prefix}{k}": v for k, v in metric_mapping.items()}
+            selected_metrics = {f"{standard_prefix}{k}": v for k, v in metric_mapping.items()}
         
-        # 메트릭 로깅 및 저장
-        self.log_metrics(phase)
-        
-        return selected_metrics
+        return {f"{standard_prefix}{k}": v for k, v in selected_metrics.items()}
+
+    def compute(self, prefix: str = "") -> Dict[str, float]:
+        """이전 버전과의 호환성을 위한 메서드"""
+        metrics = self.compute_metrics(prefix)
+        self.log_metrics(prefix.rstrip('/').replace('_', ''))
+        return metrics
 
     def log_metrics(self, phase: str):
         """모든 메트릭 로깅"""
-        # 실제 존재하는 클래스 이름 가져오기
+        # phase 이름 정규화
+        phase_map = {
+            'val': 'validation',
+            'eval': 'validation',
+            'train': 'train',
+            'test': 'test'
+        }
+        
+        normalized_phase = phase_map.get(phase, phase)
+        if normalized_phase not in ['train', 'validation', 'test']:
+            logging.warning(f"Unknown phase '{phase}' for metric logging")
+            return
+        
         active_class_names = self._get_active_class_names()
         
-        # 1. Classification Report 생성 및 저장
-        report = classification_report(
-            self.all_labels, 
-            self.all_preds,
-            target_names=active_class_names,
-            zero_division=0
-        )
-        
-        # wandb에 테이블로 저장
+        # Classification Report 생성
         report_dict = classification_report(
             self.all_labels, 
             self.all_preds,
@@ -127,22 +140,32 @@ class BaseEmotionMetrics:
             output_dict=True
         )
         
-        # F1 커브 로깅
-        self._log_f1_curve(phase)
+        # 텍스트 형태의 리포트 생성 및 출력 (여기서만 출력)
+        report_text = classification_report(
+            self.all_labels, 
+            self.all_preds,
+            target_names=active_class_names,
+            zero_division=0
+        )
         
-        # wandb에 테이블로 저장
+        # 콘솔에 출력 (한 번만)
+        logging.info(f"\n{normalized_phase.upper()} Epoch {self.current_epoch} Classification Report:")
+        logging.info("="*50)
+        logging.info(report_text)
+        logging.info("="*50)
+        
+        # wandb에 로깅
         wandb.log({
-            f"{phase}/classification_report": wandb.Table(
+            f"{normalized_phase}/classification_report": wandb.Table(
                 dataframe=pd.DataFrame(report_dict).transpose()
             ),
-            f"{phase}/epoch": self.current_epoch
+            f"{normalized_phase}/epoch": self.current_epoch,
+            "current_epoch": self.current_epoch
         })
         
-        # 2. Confusion Matrix
-        self._log_confusion_matrix(phase, active_class_names)
-        
-        # 3. ROC & PR Curves
-        self._log_combined_curves(phase, active_class_names)
+        # Confusion Matrix & ROC Curves
+        self._log_confusion_matrix(normalized_phase, active_class_names)
+        self._log_combined_curves(normalized_phase, active_class_names)
 
     def _log_confusion_matrix(self, phase: str, class_names: List[str]):
         """Confusion Matrix 생성 및 로깅"""
@@ -210,15 +233,16 @@ class BaseEmotionMetrics:
         plt.close()
 
     def _log_f1_curve(self, phase: str):
-        """F1 score 변화 추"""
+        """F1 score 변화 추적"""
         plt.figure(figsize=(10, 6))
         
         # F1 score 계산 및 저장
         f1 = f1_score(self.all_labels, self.all_preds, average='macro')
         
-        # wandb에 스칼라 으로 저장
+        # wandb에 스칼라 값으로 저장 (phase 이름 수정)
+        metric_name = f"{phase}/f1"  # validation/validation/f1 -> val/f1
         wandb.log({
-            f"{phase}/f1_score": f1,
+            metric_name: f1,
             "epoch": self.current_epoch
         })
         
@@ -237,7 +261,8 @@ class BaseEmotionMetrics:
         phase_metrics = self.config.metrics[phase].metrics
         
         for metric in phase_metrics:
-            key = f"{phase}_{metric}"
+            # 메트릭 키 이름을 일관되게 변경
+            key = f"{phase}/{metric}"  # validation/validation/accuracy -> val/accuracy
             if key in metrics_dict:
                 selected_metrics[key] = metrics_dict[key]
                 

@@ -1,7 +1,7 @@
 # 학습 기본 설정
 batch_size: 32
 num_workers: 4
-max_epochs: 10
+max_epochs: 30
 learning_rate: 0.001
 
 # 데이터로더 설정
@@ -46,8 +46,8 @@ logging:
 # 체크포인트 설정
 checkpoint:
   dirpath: "checkpoints"
-  filename: "model-{epoch:02d}-{val_loss:.2f}"
-  monitor: "val_loss"
+  filename: "model-{epoch:02d}-{validation/loss:.2f}"
+  monitor: "validation/loss"
   mode: "min"
   save_top_k: 3
   save_last: true
@@ -55,7 +55,29 @@ checkpoint:
 # Early stopping 설정
 early_stopping:
   enabled: true
-  monitor: "val_loss"
+  monitor: "validation/loss"
+  patience: 5
   mode: "min"
-  patience: 10
   min_delta: 0.001
+
+# Loss 설정
+loss:
+  name: "focal"  # "ce" or "focal"
+  use_class_weights: true
+  class_weights:
+    mode: "manual"  # "auto", "manual", "none"
+    manual_weights: {  # mode가 "manual"일 때 사용
+      "angry": 0.5,
+      "disgust": 1.3,
+      "fear": 1.0,
+      "happy": 0.8,
+      "sad": 1.2,
+      "surprise": 1.0,
+      "neutral": 3.0
+    }
+  focal:
+    gamma: 2.0
+
+# Sampling 설정
+weighted_sampling:
+  enabled: true

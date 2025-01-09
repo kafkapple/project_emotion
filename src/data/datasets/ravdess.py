@@ -38,9 +38,45 @@ class RavdessDataset(BaseDataset):
         self.config.dataset.class_names = self.class_names
         self.config.dataset.num_classes = self.num_classes
         
-        # 클래스별 샘플 수 계산
-        self.class_counts = self.samples['emotion'].value_counts()
-        self.target_samples = int(self.class_counts.max() * config.dataset.augmentation.get('balance_ratio', 1.0))
+        # 클래스별 샘플 수 계산 (train split에서만)
+        if self.split == 'train':
+            self.class_counts = self.samples['emotion'].value_counts()
+            if len(self.class_counts) > 0:  # 빈 데이터프레임이 아닌 경우에만
+                self.target_samples = int(self.class_counts.max() * 
+                                        config.dataset.augmentation.get('balance_ratio', 1.0))
+            else:
+                self.target_samples = 0
+                logging.warning(f"No samples found in {split} split!")
+        else:
+            # train이 아닌 경우 불필요한 계산 방지
+            self.class_counts = None
+            self.target_samples = 0
+
+        # 모든 오디오 파일 경로 가져오기
+        all_files = self._get_all_files()
+        
+        # Train/Val/Test Split
+        if hasattr(config.dataset, 'splits'):
+            # Split ratios from config
+            train_ratio = config.dataset.splits.ratios.train
+            val_ratio = config.dataset.splits.ratios.val
+            test_ratio = config.dataset.splits.ratios.test
+            
+            # Stratified split 수행
+            train_files, val_files, test_files = self._stratified_split(
+                all_files, 
+                train_ratio=train_ratio,
+                val_ratio=val_ratio,
+                test_ratio=test_ratio
+            )
+            
+            # 현재 split에 해당하는 파일 목록 선택
+            if split == 'train':
+                self.files = train_files
+            elif split == 'val':
+                self.files = val_files
+            elif split == 'test':
+                self.files = test_files
 
     def _get_filtered_class_names(self) -> List[str]:
         """필터링이 적용된 클래스 이름 목록 반환"""
@@ -77,138 +113,183 @@ class RavdessDataset(BaseDataset):
         
     def _apply_split(self, df: pd.DataFrame) -> pd.DataFrame:
         """데이터셋 분할 적용"""
-        # splits.method로 경로 변경
+        # 이미 split이 있는 경우 기존 split 유지
+        if 'split' in df.columns:
+            logging.info("Using existing splits from dataset")
+            return df
+            
+        # Split 방법 확인
         split_method = self.config.dataset.splits.method
+        logging.info(f"Applying {split_method} split...")
         
-        if split_method == "random":
+        if split_method == "actor":
+            # Actor 기준으로 분할
+            return self._apply_actor_split(df)
+        elif split_method == "random":
+            # 랜덤 분할
             return self._apply_random_split(df)
         elif split_method == "kfold":
+            # K-Fold 분할
             return self._apply_kfold_split(df)
         elif split_method == "stratified":
-            # StratifiedKFold로 변경
-            k = self.config.dataset.splits.k_folds
-            current_fold = self.config.dataset.splits.current_fold
-            
-            skf = StratifiedKFold(
-                n_splits=k, 
-                shuffle=True, 
-                random_state=self.config.dataset.seed
-            )
-            
-            # 현재 fold에 해당하는 분할 찾기
-            for i, (train_idx, test_idx) in enumerate(skf.split(df, df['emotion'])):
-                if i == current_fold:
-                    train_val_df = df.iloc[train_idx]
-                    test_df = df.iloc[test_idx]
-                    
-                    # Train-Val 분할도 stratified하게
-                    val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
-                    train_df, val_df = train_test_split(
-                        train_val_df,
-                        test_size=val_ratio,
-                        stratify=train_val_df['emotion'],
-                        random_state=self.config.dataset.seed
-                    )
-                    
-                    # Split 정보 추가
-                    df_split = df.copy()
-                    df_split['split'] = self.config.dataset.splits.train  # 기본값
-                    df_split.loc[val_df.index, 'split'] = self.config.dataset.splits.val
-                    df_split.loc[test_df.index, 'split'] = self.config.dataset.splits.test
-                    
-                    return df_split
-                    
-            raise ValueError(f"Invalid fold number: {current_fold}")
+            # Stratified 분할
+            return self._apply_stratified_split(df)
         else:
             raise ValueError(f"Unknown split method: {split_method}")
-
+            
+    def _apply_actor_split(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Actor 기준으로 데이터셋 분할"""
+        actors = np.array(sorted(df['actor'].unique()))
+        np.random.seed(self.config.dataset.seed)
+        np.random.shuffle(actors)
+        
+        n_actors = len(actors)
+        n_train = int(n_actors * self.config.dataset.splits.ratios.train)
+        n_val = int(n_actors * self.config.dataset.splits.ratios.val)
+        
+        train_actors = actors[:n_train]
+        val_actors = actors[n_train:n_train + n_val]
+        test_actors = actors[n_train + n_val:]
+        
+        # Split 정보 추가 ('validation' -> 'val')
+        df['split'] = 'train'  # 기본값
+        df.loc[df['actor'].isin(val_actors), 'split'] = 'val'  # 'validation' -> 'val'
+        df.loc[df['actor'].isin(test_actors), 'split'] = 'test'
+        
+        self._log_split_statistics(df)
+        return df
+        
     def _apply_random_split(self, df: pd.DataFrame) -> pd.DataFrame:
-        """랜덤 분할"""
+        """랜덤 분할 적용 (stratified)"""
         # Train-Test 분할
         train_val_df, test_df = train_test_split(
             df,
             test_size=self.config.dataset.splits.ratios.test,
-            random_state=self.config.dataset.seed,
-            stratify=df['emotion'] if self.config.dataset.splits.get('stratify', True) else None
+            stratify=df['emotion'],
+            random_state=self.config.dataset.seed
         )
         
         # Train-Val 분할
-        val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
+        val_ratio = self.config.dataset.splits.ratios.val / (
+            self.config.dataset.splits.ratios.train + self.config.dataset.splits.ratios.val
+        )
         train_df, val_df = train_test_split(
             train_val_df,
             test_size=val_ratio,
-            random_state=self.config.dataset.seed,
-            stratify=train_val_df['emotion'] if self.config.dataset.splits.get('stratify', True) else None
+            stratify=train_val_df['emotion'],
+            random_state=self.config.dataset.seed
         )
         
-        # Split 정보 추가
-        df.loc[train_df.index, 'split'] = self.config.dataset.splits.train
-        df.loc[val_df.index, 'split'] = self.config.dataset.splits.val
-        df.loc[test_df.index, 'split'] = self.config.dataset.splits.test
+        # Split 정보 추가 ('validation' -> 'val')
+        df['split'] = 'train'  # 기본값
+        df.loc[val_df.index, 'split'] = 'val'  # 'validation' -> 'val'
+        df.loc[test_df.index, 'split'] = 'test'
         
+        self._log_split_statistics(df)
         return df
-
+        
     def _apply_kfold_split(self, df: pd.DataFrame) -> pd.DataFrame:
         """K-Fold 분할 적용"""
-        k = self.config.dataset.splits.get('k_folds', 5)
-        fold = self.config.dataset.splits.get('current_fold', 0)
+        k = self.config.dataset.splits.k_folds
+        current_fold = self.config.dataset.splits.current_fold
         
-        # Actor 기준 K-Fold 분할
-        actors = np.array(sorted(df['actor'].unique()))
-        kf = KFold(n_splits=k, shuffle=True, random_state=self.config.dataset.seed)
+        if current_fold >= k:
+            raise ValueError(f"Invalid fold number: {current_fold} (total folds: {k})")
+            
+        # Stratified K-Fold 적용
+        skf = StratifiedKFold(
+            n_splits=k,
+            shuffle=True,
+            random_state=self.config.dataset.seed
+        )
         
         # 현재 fold에 해당하는 분할 찾기
-        for i, (train_idx, test_idx) in enumerate(kf.split(actors)):
-            if i == fold:
-                test_actors = actors[test_idx]
+        for i, (train_val_idx, test_idx) in enumerate(skf.split(df, df['emotion'])):
+            if i == current_fold:
+                train_val_df = df.iloc[train_val_idx]
+                test_df = df.iloc[test_idx]
                 
-                # validation을 위해 train 데이터 추가 분할
-                train_actors = actors[train_idx]
-                val_size = int(len(train_actors) * self.config.dataset.splits.ratios.val)
-                val_actors = train_actors[:val_size]
-                train_actors = train_actors[val_size:]
+                # Train-Val 분할
+                val_ratio = self.config.dataset.splits.ratios.val / (
+                    self.config.dataset.splits.ratios.train + self.config.dataset.splits.ratios.val
+                )
+                train_df, val_df = train_test_split(
+                    train_val_df,
+                    test_size=val_ratio,
+                    stratify=train_val_df['emotion'],
+                    random_state=self.config.dataset.seed
+                )
                 
-                # 임시 데이터프레임에 split 정보 추가
-                df_split = df.copy()
-                df_split['split'] = self.config.dataset.splits.train
-                df_split.loc[df_split['actor'].isin(val_actors), 'split'] = self.config.dataset.splits.val
-                df_split.loc[df_split['actor'].isin(test_actors), 'split'] = self.config.dataset.splits.test
+                # Split 정보 추가 ('validation' -> 'val')
+                df['split'] = 'train'  # 기본값
+                df.loc[val_df.index, 'split'] = 'val'  # 'validation' -> 'val'
+                df.loc[test_df.index, 'split'] = 'test'
                 
-                return df_split
+                self._log_split_statistics(df)
+                return df
                 
-        raise ValueError(f"Invalid fold number: {fold}")
+        raise ValueError(f"Failed to find fold {current_fold}")
+        
+    def _log_split_statistics(self, df: pd.DataFrame) -> None:
+        """분할 결과 통계 로깅"""
+        logging.info("\nDataset split statistics:")
+        for split in ['train', 'val', 'test']:  # 'validation' -> 'val'
+            split_df = df[df['split'] == split]
+            logging.info(f"\n{split} set:")
+            logging.info(f"Number of samples: {len(split_df)}")
+            
+            # Actor 정보 로깅 (있는 경우)
+            if 'actor' in df.columns:
+                actors = sorted(split_df['actor'].unique())
+                logging.info(f"Number of actors: {len(actors)}")
+                logging.info(f"Actors: {actors}")
+            
+            # 클래스 분포 로깅
+            class_dist = split_df['emotion'].value_counts()
+            logging.info("\nClass distribution:")
+            for emotion, count in class_dist.items():
+                logging.info(f"{emotion}: {count} ({count/len(split_df)*100:.2f}%)")
 
     def _load_dataset(self) -> pd.DataFrame:
         """데이터셋 로드 및 필터링"""
         metadata_path = self.root_dir / "ravdess_metadata.csv"
         
         if not metadata_path.exists():
-            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
-            
+            # 메타데이터 파일이 없으면 생성
+            self._generate_ravdess_metadata(self.root_dir)
+        
+        # 메타데이터 로드
         df = pd.read_csv(metadata_path)
         
-        # 필터링된 클래스만 포함
-        df = df[df['emotion'].isin(self.class_names)]
+        # 클래스 분포 확인 및 로깅 (분할 전)
+        logging.info("\nInitial class distribution:")
+        class_dist = df['emotion'].value_counts()
+        for emotion, count in class_dist.items():
+            logging.info(f"{emotion}: {count} ({count/len(df)*100:.2f}%)")
         
-        # 레이블 인덱스 재매핑
-        label_map = {name: idx for idx, name in enumerate(self.class_names)}
-        df['label'] = df['emotion'].map(label_map)
+        # Split 적용 (아직 split이 없는 경우)
+        if 'split' not in df.columns:
+            df = self._apply_split(df)
         
-        # 추가 필터링 적용
-        if hasattr(self.config.dataset, 'filtering') and self.config.dataset.filtering.enabled:
-            if self.config.dataset.filtering.speech_only:
-                df = df[df['vocal_channel'] == 1]  # 1: speech
-            if self.config.dataset.filtering.emotion_intensity:
-                df = df[df['emotion_intensity'].isin(self.config.dataset.filtering.emotion_intensity)]
-            if self.config.dataset.filtering.gender:
-                df = df[df['gender'].isin(self.config.dataset.filtering.gender)]
+        # 현재 split에 해당하는 데이터만 필터링
+        df = df[df['split'] == self.split].copy()
         
-        # Split 적용
-        df_split = self._apply_split(df)
-        target_split = self.config.dataset.splits[self.split]
-        samples = df_split[df_split['split'] == target_split]
+        # 현재 split의 클래스 분포 로깅
+        logging.info(f"\n{self.split} set class distribution:")
+        class_dist = df['emotion'].value_counts()
+        for emotion, count in class_dist.items():
+            logging.info(f"{emotion}: {count} ({count/len(df)*100:.2f}%)")
         
-        return samples
+        # 클래스 밸런싱 적용 (train split에만)
+        if self.split == 'train' and self.config.dataset.balance.enabled:
+            df = self._balance_classes(df)
+            # 밸런싱 후 분포 로깅
+            logging.info(f"\nAfter balancing - {self.split} set class distribution:")
+            class_dist = df['emotion'].value_counts()
+            for emotion, count in class_dist.items():
+                logging.info(f"{emotion}: {count} ({count/len(df)*100:.2f}%)")
+        
+        return df
         
     def __len__(self):
         return len(self.samples)
@@ -269,7 +350,7 @@ class RavdessDataset(BaseDataset):
             "emotion": sample['emotion']
         }
 
-    def _generate_ravdess_metadata(root_dir: Path) -> bool:
+    def _generate_ravdess_metadata(self, root_dir: Path) -> bool:
         """RAVDESS 데이터셋의 메타데이터 생성"""
         metadata_path = root_dir / "ravdess_metadata.csv"
         
@@ -335,7 +416,7 @@ class RavdessDataset(BaseDataset):
         test_actors = actors[int(0.85 * n_actors):]
         
         df['split'] = 'train'
-        df.loc[df['actor'].isin(val_actors), 'split'] = 'validation'
+        df.loc[df['actor'].isin(val_actors), 'split'] = 'val'  # 'validation' -> 'val'
         df.loc[df['actor'].isin(test_actors), 'split'] = 'test'
         
         df.to_csv(metadata_path, index=False)
@@ -347,37 +428,42 @@ class RavdessDataset(BaseDataset):
         if not self.config.dataset.augmentation.enabled or self.split != 'train':
             return waveform
         
+        # train split이 아니거나 class_counts가 없으면 기본 augmentation만 적용
+        if self.class_counts is None:
+            return self._apply_basic_augmentation(waveform)
+        
         # 현재 클래스의 샘플 수
-        current_samples = self.class_counts[emotion]
+        current_samples = self.class_counts.get(emotion, 0)
         
         # augmentation 횟수 계산
-        num_aug = max(0, min(
-            self.config.dataset.augmentation.get('max_augmentations', 3),
-            (self.target_samples - current_samples) // current_samples
-        ))
+        if current_samples > 0 and self.target_samples > 0:
+            num_aug = max(0, min(
+                self.config.dataset.augmentation.get('max_augmentations', 3),
+                (self.target_samples - current_samples) // current_samples
+            ))
+        else:
+            num_aug = 0
         
         augmented = waveform
         for _ in range(num_aug):
-            if self.config.dataset.augmentation.noise.enabled:
-                noise = torch.randn_like(waveform) * self.config.dataset.augmentation.noise.noise_level
-                augmented = augmented + noise
-            
-            if self.config.dataset.augmentation.volume.enabled:
-                gain = torch.FloatTensor(1).uniform_(
-                    self.config.dataset.augmentation.volume.min_gain,
-                    self.config.dataset.augmentation.volume.max_gain
-                )
-                augmented = augmented * gain
-            
-            if self.config.dataset.augmentation.pitch_shift.enabled:
-                # pitch shift 구현
-                pass
-            
-            if self.config.dataset.augmentation.time_mask.enabled:
-                # time mask 구현
-                pass
-            
+            augmented = self._apply_basic_augmentation(augmented)
+        
         return augmented
+
+    def _apply_basic_augmentation(self, waveform: torch.Tensor) -> torch.Tensor:
+        """기본 augmentation 적용"""
+        if self.config.dataset.augmentation.noise.enabled:
+            noise = torch.randn_like(waveform) * self.config.dataset.augmentation.noise.noise_level
+            waveform = waveform + noise
+        
+        if self.config.dataset.augmentation.volume.enabled:
+            gain = torch.FloatTensor(1).uniform_(
+                self.config.dataset.augmentation.volume.min_gain,
+                self.config.dataset.augmentation.volume.max_gain
+            )
+            waveform = waveform * gain
+        
+        return waveform
 
     @classmethod
     def create_filtered_dataset(cls, 
@@ -418,4 +504,168 @@ class RavdessDataset(BaseDataset):
         dataset.samples = filtered_df
         
         return dataset
+
+    def calculate_class_weights(self) -> torch.Tensor:
+        """클래스별 가중치 계산"""
+        if not hasattr(self, '_class_weights'):
+            labels = self.get_labels()
+            class_counts = torch.bincount(torch.tensor(labels))
+            total_samples = len(labels)
+            
+            # 역수 가중치 계산
+            self._class_weights = torch.FloatTensor(len(class_counts))
+            for idx, count in enumerate(class_counts):
+                self._class_weights[idx] = total_samples / (len(class_counts) * count)
+            
+        return self._class_weights
+
+    def get_labels(self):
+        """데이터셋의 레이블 목록 반환"""
+        return [label for _, label in self.samples]
+
+    def _balance_classes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """클래스 밸런싱 적용"""
+        balance_method = self.config.dataset.balance.method
+        target_size = self.config.dataset.balance.target_size
+        
+        if balance_method == "oversample":
+            # 오버샘플링
+            max_size = df['emotion'].value_counts().max() if target_size == "auto" else target_size
+            balanced_dfs = []
+            
+            for emotion in df['emotion'].unique():
+                emotion_df = df[df['emotion'] == emotion]
+                if len(emotion_df) < max_size:
+                    # 랜덤 오버샘플링
+                    resampled = emotion_df.sample(
+                        n=max_size, 
+                        replace=True, 
+                        random_state=self.config.dataset.seed
+                    )
+                    balanced_dfs.append(resampled)
+                else:
+                    balanced_dfs.append(emotion_df)
+                    
+            return pd.concat(balanced_dfs, ignore_index=True)
+            
+        elif balance_method == "undersample":
+            # 언더샘플링
+            min_size = df['emotion'].value_counts().min() if target_size == "auto" else target_size
+            balanced_dfs = []
+            
+            for emotion in df['emotion'].unique():
+                emotion_df = df[df['emotion'] == emotion]
+                resampled = emotion_df.sample(
+                    n=min_size, 
+                    replace=False, 
+                    random_state=self.config.dataset.seed
+                )
+                balanced_dfs.append(resampled)
+                
+            return pd.concat(balanced_dfs, ignore_index=True)
+        
+        else:
+            raise ValueError(f"Unknown balance method: {balance_method}")
+
+    def _stratified_split(self, files: List[Path], train_ratio: float, val_ratio: float, test_ratio: float):
+        """Stratified split 수행"""
+        # 감정 레이블 추출
+        labels = [self._get_emotion_from_filename(f.name) for f in files]
+        
+        # Stratified split
+        train_idx, temp_idx = train_test_split(
+            range(len(files)),
+            train_size=train_ratio,
+            stratify=labels,
+            random_state=self.config.dataset.seed
+        )
+        
+        # Remaining data를 validation과 test로 나누기
+        val_ratio_adjusted = val_ratio / (val_ratio + test_ratio)
+        val_idx, test_idx = train_test_split(
+            temp_idx,
+            train_size=val_ratio_adjusted,
+            stratify=[labels[i] for i in temp_idx],
+            random_state=self.config.dataset.seed
+        )
+        
+        return (
+            [files[i] for i in train_idx],
+            [files[i] for i in val_idx],
+            [files[i] for i in test_idx]
+        )
+
+    def _get_all_files(self) -> List[Path]:
+        """모든 오디오 파일 경로 가져오기"""
+        if not self.root_dir.exists():
+            raise FileNotFoundError(f"Dataset directory not found: {self.root_dir}")
+        
+        # .wav 파일만 수집
+        files = list(self.root_dir.glob("Actor_*/*.wav"))
+        
+        if not files:
+            raise FileNotFoundError(f"No .wav files found in {self.root_dir}")
+        
+        # 파일 정렬 (재현성을 위해)
+        files.sort()
+        
+        if self.config.debug.enabled:
+            logging.info(f"Found {len(files)} audio files")
+        
+        return files
+
+    def _get_emotion_from_filename(self, filename: str) -> str:
+        """파일명에서 감정 레이블 추출"""
+        # 파일명 형식: "Actor_01-01-03-01-01-01-01.wav"
+        # 세 번째 숫자가 감정 코드
+        emotion_code = filename.split("-")[2]
+        
+        # 감정 코드 매핑
+        emotion_map = {
+            "01": "neutral",
+            "02": "calm",
+            "03": "happy",
+            "04": "sad",
+            "05": "angry",
+            "06": "fearful",
+            "07": "disgust",
+            "08": "surprised"
+        }
+        
+        return emotion_map.get(emotion_code, "unknown")
+
+    def _apply_stratified_split(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Stratified 분할 적용"""
+        # emotion과 actor를 결합하여 단일 레이블 생성
+        combined_labels = df['emotion'] + '_' + df['actor'].astype(str)
+        
+        # Train-Test 분할
+        train_val_df, test_df = train_test_split(
+            df,
+            test_size=self.config.dataset.splits.ratios.test,
+            stratify=combined_labels,  # 결합된 레이블 사용
+            random_state=self.config.dataset.seed
+        )
+        
+        # validation을 위한 새로운 결합 레이블 생성
+        train_val_labels = train_val_df['emotion'] + '_' + train_val_df['actor'].astype(str)
+        
+        # Train-Val 분할
+        val_ratio = self.config.dataset.splits.ratios.val / (
+            self.config.dataset.splits.ratios.train + self.config.dataset.splits.ratios.val
+        )
+        train_df, val_df = train_test_split(
+            train_val_df,
+            test_size=val_ratio,
+            stratify=train_val_labels,  # 결합된 레이블 사용
+            random_state=self.config.dataset.seed
+        )
+        
+        # Split 정보 추가
+        df['split'] = 'train'  # 기본값
+        df.loc[val_df.index, 'split'] = 'val'
+        df.loc[test_df.index, 'split'] = 'test'
+        
+        self._log_split_statistics(df)
+        return df
 

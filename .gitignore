@@ -6,6 +6,7 @@ wandb/
 outputs/
 data/
 models/
+checkpoints/
 !src/data/
 !src/models/
 _backup/

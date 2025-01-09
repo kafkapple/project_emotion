@@ -46,6 +46,7 @@ class BaseModel(pl.LightningModule):
             if 'learning_rate' in self.config.train.logging.metrics:
                 self.log('train/learning_rate', avg_lr)
             
+        self.log("train/loss", loss)
         return loss
         
     def validation_step(self, batch, batch_idx):
@@ -54,6 +55,12 @@ class BaseModel(pl.LightningModule):
         
         # loss 누적
         self.validation_step_losses.append(loss.item())
+        self.log("validation/loss", loss)
+        return loss
+        
+    def test_step(self, batch, batch_idx):
+        loss = ...
+        self.log("test/loss", loss)
         return loss
         
     def on_train_epoch_end(self):

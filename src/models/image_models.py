@@ -6,6 +6,7 @@ from ..metrics.image_metrics import ImageEmotionMetrics
 import logging
 import torch
 from typing import Dict, Any
+from ..losses.focal_loss import FocalLoss
 
 class PretrainedImageModel(pl.LightningModule):
     def __init__(self, config: Dict[str, Any]):
@@ -19,6 +20,9 @@ class PretrainedImageModel(pl.LightningModule):
         # 분류기 초기화
         self.classifier = self._init_classifier()
         
+        # Loss function 초기화
+        self.criterion = self._init_criterion()
+        
         # Freezing 설정 적용
         if config.model.freeze.enabled:
             self._freeze_layers()
@@ -28,9 +32,9 @@ class PretrainedImageModel(pl.LightningModule):
         self.val_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         self.test_metrics = ImageEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         
-        # Debug 모드 출력 주석 처리
-        # if config.debug.enabled:
-        #     self._log_model_info()
+        # Debug 모드일 때만 모델 정보 출력
+        if config.debug.enabled:
+            self._log_model_info()
     
     def _init_model(self):
         """모델 초기화"""
@@ -107,6 +111,9 @@ class PretrainedImageModel(pl.LightningModule):
     
     def _log_model_info(self):
         """모델 정보 로깅"""
+        if not self.config.debug.model_summary:
+            return
+        
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         
@@ -125,25 +132,55 @@ class PretrainedImageModel(pl.LightningModule):
             features = features.view(features.size(0), -1)
             return self.classifier(features)
     
+    def _init_criterion(self):
+        """Loss function 초기화"""
+        if self.config.train.loss.name == "focal":
+            # 클래스 가중치 설정
+            alpha = self._get_class_weights()
+            
+            return FocalLoss(
+                alpha=alpha,
+                gamma=self.config.train.loss.focal.gamma
+            )
+        return nn.CrossEntropyLoss()
+    
+    def _get_class_weights(self):
+        """클래스 가중치 계산"""
+        weight_config = self.config.dataset.class_weights
+        
+        if weight_config.mode == "none":
+            return None
+        elif weight_config.mode == "manual":
+            # 수동으로 지정된 가중치 사용
+            weights = torch.zeros(self.config.dataset.num_classes)
+            for i, class_name in enumerate(self.config.dataset.class_names):
+                weights[i] = weight_config.manual_weights[class_name]
+            return weights.to(self.device)
+        elif weight_config.mode == "auto":
+            # 데이터셋의 클래스 분포에 기반한 자동 가중치 계산
+            return self.train_dataloader().dataset.calculate_class_weights().to(self.device)
+        else:
+            raise ValueError(f"Unknown class weights mode: {weight_config.mode}")
+    
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
-        loss = F.cross_entropy(outputs, batch["label"])
+        loss = self.criterion(outputs, batch["label"])
         self.train_metrics.update(outputs, batch["label"])
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)
-        loss = F.cross_entropy(outputs, batch["label"])
+        loss = self.criterion(outputs, batch["label"])
         self.val_metrics.update(outputs, batch["label"])
-        self.log("val_loss", loss, prog_bar=True)
+        self.log("validation/loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
     
     def test_step(self, batch, batch_idx):
         outputs = self(batch)
-        loss = F.cross_entropy(outputs, batch["label"])
+        loss = self.criterion(outputs, batch["label"])
         self.test_metrics.update(outputs, batch["label"])
-        self.log("test_loss", loss, prog_bar=True)
+        self.log("test/loss", loss, prog_bar=True, on_epoch=True)
         return loss
     
     def configure_optimizers(self):
@@ -169,13 +206,17 @@ class PretrainedImageModel(pl.LightningModule):
         return [optimizer], [scheduler]
     
     def on_train_epoch_end(self):
-        metrics = self.train_metrics.compute(prefix="train_")
+        metrics = self.train_metrics.compute(prefix="train")
+        for name, value in metrics.items():
+            self.log(name, value, prog_bar=True)
         self.train_metrics.reset()
         
     def on_validation_epoch_end(self):
-        metrics = self.val_metrics.compute(prefix="val_")
+        metrics = self.val_metrics.compute(prefix="validation")
+        for name, value in metrics.items():
+            self.log(name, value, prog_bar=True, sync_dist=True)
         self.val_metrics.reset()
-        
+    
     def on_test_epoch_end(self):
         metrics = self.test_metrics.compute(prefix="test_")
         

@@ -20,6 +20,7 @@ dirs:
   subdirs: ["checkpoints", "logs", "metrics", "reports"]
 logger:
   wandb:
+    enabled: true
     project_name: ${project.name}
     entity: "ailab_upstage_fastcampus"
     tags: ["tag1"]
@@ -55,4 +56,14 @@ hydra:
   output_subdir: null
   job:
     chdir: false
+
+model:
+  wav2vec:
+    model_id: "facebook/wav2vec2-base"
+    model_type: "processor"
+    config:
+      torch_dtype: "float16"
+      output_hidden_states: false
+      output_attentions: false
+      return_dict: false
 

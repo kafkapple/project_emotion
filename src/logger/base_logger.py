@@ -4,6 +4,7 @@ import os
 from .wandb_logger import WandbLogger
 from .print_logger import PrintLogger
 import wandb
+import logging
 
 class Logger:
     def __init__(self, config: DictConfig):
@@ -49,3 +50,9 @@ class Logger:
         # wandb config 업데이트
         if wandb.run is not None:
             wandb.config.update(self.wandb_config)
+
+    def setup_logging(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )

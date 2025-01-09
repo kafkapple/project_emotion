@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from src.metrics.audio_metrics import AudioEmotionMetrics
 from sklearn.metrics import f1_score
+import os
+import contextlib
 
 class Wav2VecEmotionModel(pl.LightningModule):
     def __init__(self, config: Dict[str, Any]):
@@ -18,8 +20,14 @@ class Wav2VecEmotionModel(pl.LightningModule):
         if hasattr(config.model, 'matmul_precision'):
             torch.set_float32_matmul_precision(config.model.matmul_precision)
         
-        # Wav2Vec2 모델 초기화 (단순화)
-        self.wav2vec = Wav2Vec2Model.from_pretrained(config.model.pretrained)
+        # Wav2Vec2 모델 초기화 (출력 억제)
+        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+            self.wav2vec = Wav2Vec2Model.from_pretrained(
+                config.model.pretrained,
+                output_hidden_states=False,
+                output_attentions=False,
+                return_dict=False
+            )
         
         # 분류기 레이어 분리
         self.feature_extractor = nn.Sequential(
@@ -102,7 +110,8 @@ class Wav2VecEmotionModel(pl.LightningModule):
             logging.info(f"Processed input shape: {audio.shape}")
         
         # wav2vec2 feature extraction (frozen)
-        audio_features = self.wav2vec(audio).last_hidden_state
+        # return_dict=False일 때는 tuple이 반환되며, 첫 번째 요소가 last_hidden_state
+        audio_features = self.wav2vec(audio)[0]  # [batch_size, seq_len, hidden_size]
         embeddings = torch.mean(audio_features, dim=1)  # [batch_size, hidden_size]
         
         # 분류기 feature extraction
@@ -122,15 +131,14 @@ class Wav2VecEmotionModel(pl.LightningModule):
         outputs = self(batch)
         loss = F.cross_entropy(outputs, batch["label"])
         self.train_metrics.update(outputs, batch["label"])
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = F.cross_entropy(outputs, batch["label"])
         self.val_metrics.update(outputs, batch["label"])
-        
-        # val_loss 로깅 추가
-        self.log("val_loss", loss, prog_bar=True)
+        self.log("validation/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
     
     def test_step(self, batch, batch_idx):
@@ -144,13 +152,16 @@ class Wav2VecEmotionModel(pl.LightningModule):
         return loss
     
     def on_train_epoch_end(self):
-        metrics = self.train_metrics.compute(prefix="train_")
+        """Train epoch 종료시 메트릭스 계산 및 로깅"""
+        metrics = self.train_metrics.compute(prefix="train")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
+        self.train_metrics.log_metrics("train")
         self.train_metrics.reset()
         
     def on_validation_epoch_end(self):
-        metrics = self.val_metrics.compute(prefix="val_")
+        """Validation epoch 종료시 메트릭스 계산 및 로깅"""
+        metrics = self.val_metrics.compute(prefix="validation")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
         self.val_metrics.reset()
@@ -179,7 +190,10 @@ class Wav2VecEmotionModel(pl.LightningModule):
         logging.info(f"\nStarting Epoch {self.current_epoch}/{self.trainer.max_epochs}")
 
     def on_validation_epoch_start(self):
+        """Validation epoch 시작시 메트릭스 초기화"""
+        self.val_metrics.reset()
         self.val_metrics.set_epoch(self.current_epoch)
+        logging.info(f"\nStarting Validation Epoch {self.current_epoch}")
 
     def on_test_epoch_start(self):
         self.test_metrics.set_epoch(self.current_epoch)
