@@ -1,7 +1,7 @@
 # 학습 기본 설정
 batch_size: 32
 num_workers: 4
-max_epochs: 3
+max_epochs: 50
 learning_rate: 0.001
 
 # 데이터로더 설정
@@ -56,7 +56,7 @@ checkpoint:
 early_stopping:
   enabled: true
   monitor: "validation/loss"
-  patience: 5
+  patience: 10
   mode: "min"
   min_delta: 0.001
 

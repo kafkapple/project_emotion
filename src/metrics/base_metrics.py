@@ -18,6 +18,7 @@ from sklearn.preprocessing import label_binarize
 from pathlib import Path
 import pandas as pd
 from omegaconf import DictConfig
+import torch.nn.functional as F
 
 class BaseEmotionMetrics:
     def __init__(self, num_classes: int, class_names: List[str], config: DictConfig):
@@ -25,6 +26,7 @@ class BaseEmotionMetrics:
         self.class_names = list(class_names)
         self.config = config
         self.current_epoch = 0
+        self.wandb_logger = None
         self.reset()
     
     def reset(self):
@@ -306,3 +308,109 @@ class BaseEmotionMetrics:
             target_names=self.class_names,
             zero_division=0
         ) 
+
+    def log_metrics_to_wandb(self, phase: str):
+        """wandb에 메트릭 시각화 결과 로깅"""
+        if not wandb.run:
+            return
+        
+        try:
+            # 1. Classification Report
+            report_text = classification_report(
+                self.all_labels, 
+                self.all_preds,
+                target_names=self.class_names,
+                zero_division=0
+            )
+            
+            # 텍스트 형태의 리포트를 wandb에 로깅
+            wandb.log({
+                f"{phase}/classification_report_text": wandb.Html(
+                    f"<pre>{report_text}</pre>"
+                )
+            })
+            
+            # 테이블 형태의 리포트도 함께 로깅
+            report_dict = classification_report(
+                self.all_labels, 
+                self.all_preds,
+                target_names=self.class_names,
+                zero_division=0,
+                output_dict=True
+            )
+            wandb.log({
+                f"{phase}/classification_report": wandb.Table(
+                    dataframe=pd.DataFrame(report_dict).transpose()
+                ),
+                f"{phase}/epoch": self.current_epoch
+            })
+            
+            # 2. Confusion Matrix
+            cm = confusion_matrix(self.all_labels, self.all_preds)
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                       xticklabels=self.class_names,
+                       yticklabels=self.class_names)
+            plt.title(f'{phase.capitalize()} Confusion Matrix - Epoch {self.current_epoch}')
+            plt.ylabel('True Label')
+            plt.xlabel('Predicted Label')
+            wandb.log({f"{phase}/confusion_matrix": wandb.Image(plt)})
+            plt.close()
+            
+            # 3. PR & ROC Curves (모든 클래스를 하나의 그래프에)
+            if len(self.all_labels) > 0 and len(np.unique(self.all_labels)) > 1:
+                try:
+                    y_true = label_binarize(self.all_labels, classes=range(self.num_classes))
+                    y_score = self._get_prediction_scores()
+                    
+                    if y_score.shape[0] == y_true.shape[0]:
+                        # PR Curve (하나의 그래프에 모든 클래스)
+                        plt.figure(figsize=(10, 6))
+                        for i in range(self.num_classes):
+                            precision, recall, _ = precision_recall_curve(y_true[:, i], y_score[:, i])
+                            plt.plot(recall, precision, lw=2, label=f'{self.class_names[i]}')
+                        
+                        plt.xlabel('Recall')
+                        plt.ylabel('Precision')
+                        plt.title(f'{phase.capitalize()} PR Curves - Epoch {self.current_epoch}')
+                        plt.legend(loc='best')
+                        plt.grid(True)
+                        wandb.log({f"{phase}/pr_curves": wandb.Image(plt)})
+                        plt.close()
+                        
+                        # ROC Curve (하나의 그래프에 모든 클래스)
+                        plt.figure(figsize=(10, 6))
+                        for i in range(self.num_classes):
+                            fpr, tpr, _ = roc_curve(y_true[:, i], y_score[:, i])
+                            roc_auc = auc(fpr, tpr)
+                            plt.plot(fpr, tpr, lw=2,
+                                   label=f'{self.class_names[i]} (AUC = {roc_auc:.2f})')
+                        
+                        plt.plot([0, 1], [0, 1], 'k--', lw=2)
+                        plt.xlim([0.0, 1.0])
+                        plt.ylim([0.0, 1.05])
+                        plt.xlabel('False Positive Rate')
+                        plt.ylabel('True Positive Rate')
+                        plt.title(f'{phase.capitalize()} ROC Curves - Epoch {self.current_epoch}')
+                        plt.legend(loc='lower right')
+                        plt.grid(True)
+                        wandb.log({f"{phase}/roc_curves": wandb.Image(plt)})
+                        plt.close()
+                        
+                except Exception as e:
+                    logging.warning(f"Curve generation failed: {e}")
+                
+        except Exception as e:
+            logging.error(f"Error in log_metrics_to_wandb: {e}")
+
+    def _get_prediction_scores(self) -> np.ndarray:
+        """예측 확률값 반환 (이전 안정적 버전)"""
+        if not self.all_labels or not self.all_preds:
+            return np.array([])
+        
+        # 1차원 예측값을 2차원으로 변환
+        preds = torch.tensor(self.all_preds)
+        if len(preds.shape) == 1:
+            preds = F.one_hot(preds, num_classes=self.num_classes)
+        
+        return preds.cpu().numpy() 

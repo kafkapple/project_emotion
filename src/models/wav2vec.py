@@ -154,6 +154,8 @@ class Wav2VecEmotionModel(pl.LightningModule):
     def on_train_epoch_end(self):
         """Train epoch 종료시 메트릭스 계산 및 로깅"""
         current_epoch = self.current_epoch + 1
+        
+        # 기존 메트릭 계산 및 로깅
         logging.info(f"\nTrain Epoch {current_epoch} Classification Report:")
         logging.info(self.train_metrics.get_classification_report())
         
@@ -161,17 +163,24 @@ class Wav2VecEmotionModel(pl.LightningModule):
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
         
+        # wandb 시각화 로깅 추가
+        self.train_metrics.log_metrics_to_wandb("train")
+        
         self.train_metrics.reset()
     
     def on_validation_epoch_end(self):
         """Validation epoch 종료시 메트릭스 계산 및 로깅"""
         current_epoch = self.current_epoch + 1
+        
         logging.info(f"\nValidation Epoch {current_epoch} Classification Report:")
         logging.info(self.val_metrics.get_classification_report())
         
         metrics = self.val_metrics.compute(prefix="validation")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
+        
+        # wandb 시각화 로깅 추가
+        self.val_metrics.log_metrics_to_wandb("validation")
         
         self.val_metrics.reset()
         

@@ -12,7 +12,7 @@ from src.utils.model_manager import ModelManager
 import warnings
 warnings.filterwarnings("ignore")
 
-@hydra.main(version_base="1.2", config_path="configs", config_name="config")
+@hydra.main(version_base="1.2", config_path="configs", config_name="config_image")
 def train(config: DictConfig):
     logger = Logger(config)
     logger.print_logger.print_info()
