@@ -37,15 +37,17 @@ class DataFactory:
             raise ValueError(f"Unknown dataset: {dataset_name}")
             
     @staticmethod
-    def create_dataloader(dataset, config: DictConfig, is_train: bool = False) -> DataLoader:
+    def create_dataloader(dataset, config: DictConfig, split: str):
         """데이터로더 생성"""
+        is_train = split == 'train'
+        
         return DataLoader(
             dataset,
             batch_size=config.train.batch_size,
             num_workers=config.train.num_workers,
             shuffle=is_train and config.train.dataloader.shuffle,
-            drop_last=is_train and config.train.dataloader.drop_last,
+            drop_last=config.train.dataloader.drop_last,
             pin_memory=config.train.memory_management.pin_memory,
-            persistent_workers=config.train.memory_management.persistent_workers if config.train.num_workers > 0 else False,
-            prefetch_factor=config.train.memory_management.prefetch_factor if config.train.num_workers > 0 else None,
+            persistent_workers=config.train.memory_management.persistent_workers,
+            prefetch_factor=config.train.memory_management.prefetch_factor
         )

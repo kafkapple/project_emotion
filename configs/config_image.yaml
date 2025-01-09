@@ -1,8 +1,9 @@
 defaults:
-  - dataset: fer2013 #
-  - model: efficientnet #
-  - train: train
   - _self_
+  - model: efficientnet
+  - dataset: fer2013
+  - train: train
+  - logger: default
 
 debug:
   enabled: false
@@ -14,9 +15,11 @@ project:
   name: "joon_wandb_llm_test"
   timestamp: ${now:%Y%m%d_%H%M%S}
   hydra_cwd: ${hydra:runtime.cwd}
+
 dirs:
   outputs: outputs/${project.timestamp}
   subdirs: ["checkpoints", "logs", "metrics", "reports"]
+
 logger:
   wandb:
     project_name: ${project.name}
@@ -25,7 +28,6 @@ logger:
 
 logging:
   project_name: "multimodal-emotion"
-
 
 model_manager:
   base_path: "models"

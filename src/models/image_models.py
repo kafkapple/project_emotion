@@ -13,7 +13,7 @@ class PretrainedImageModel(pl.LightningModule):
         self.save_hyperparameters()
         self.config = config
         
-        # 모델 ��기화
+        # 모델 초기화
         self.model = self._init_model()
         
         # 분류기 초기화
@@ -147,11 +147,26 @@ class PretrainedImageModel(pl.LightningModule):
         return loss
     
     def configure_optimizers(self):
-        return torch.optim.AdamW(
+        """옵티마이저와 스케줄러 설정"""
+        # 옵티마이저 설정
+        optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.config.train.learning_rate,
-            weight_decay=self.config.train.weight_decay
-        ) 
+            weight_decay=self.config.train.optimizer.weight_decay
+        )
+        
+        # 스케줄러 설정
+        scheduler = {
+            "scheduler": torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.config.train.scheduler.warmup_epochs,
+                eta_min=self.config.train.scheduler.min_lr
+            ),
+            "interval": "epoch",
+            "frequency": 1
+        }
+        
+        return [optimizer], [scheduler]
     
     def on_train_epoch_end(self):
         metrics = self.train_metrics.compute(prefix="train_")

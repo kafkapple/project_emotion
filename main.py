@@ -12,7 +12,7 @@ from src.utils.model_manager import ModelManager
 import warnings
 warnings.filterwarnings("ignore")
 
-@hydra.main(version_base="1.2", config_path="configs", config_name="config")
+@hydra.main(version_base="1.2", config_path="configs", config_name="config_image")
 def train(config: DictConfig):
     logger = Logger(config)
     logger.print_logger.print_info()
@@ -42,14 +42,14 @@ def train(config: DictConfig):
         ModelCheckpoint(
             dirpath=f"{config.dirs.outputs}/checkpoints/{config.model.name}",
             filename="{epoch}-{val_loss:.2f}",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=3
+            monitor=config.train.checkpoint.monitor,
+            mode=config.train.checkpoint.mode,
+            save_top_k=config.train.checkpoint.save_top_k
         ),
         EarlyStopping(
-            monitor="val_loss",
-            patience=3,
-            mode="min"
+            monitor=config.train.early_stopping.monitor,
+            patience=config.train.early_stopping.patience,
+            mode=config.train.early_stopping.mode
         )
     ]
     
@@ -59,8 +59,8 @@ def train(config: DictConfig):
         callbacks=callbacks,
         logger=wandb_logger,
         accelerator="auto",
-        gradient_clip_val=config.train.gradient_clip_val,
-        accumulate_grad_batches=config.train.accumulate_grad_batches,
+        gradient_clip_val=config.train.memory_management.gradient_clip_val,
+        accumulate_grad_batches=config.train.memory_management.accumulate_grad_batches,
         deterministic=True
     )
     

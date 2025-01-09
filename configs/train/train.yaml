@@ -29,6 +29,7 @@ memory_management:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   precision: 32
+  pin_memory: true
   persistent_workers: true
   prefetch_factor: 2
 
