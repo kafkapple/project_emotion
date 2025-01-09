@@ -9,8 +9,10 @@ from src.logger.base_logger import Logger
 from src.data.factory import DataFactory
 from src.models.factory import ModelFactory
 from src.utils.model_manager import ModelManager
+import warnings
+warnings.filterwarnings("ignore")
 
-@hydra.main(version_base="1.2", config_path="config", config_name="config_image")
+@hydra.main(version_base="1.2", config_path="configs", config_name="config_image")
 def train(config: DictConfig):
     logger = Logger(config)
     logger.print_logger.print_info()

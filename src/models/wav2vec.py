@@ -18,24 +18,18 @@ class Wav2VecEmotionModel(pl.LightningModule):
         if hasattr(config.model, 'matmul_precision'):
             torch.set_float32_matmul_precision(config.model.matmul_precision)
         
-        # Wav2Vec2 모델 초기화
-        self.wav2vec = Wav2Vec2Model.from_pretrained(
-            config.model.pretrained,
-            ignore_mismatched_sizes=config.model.ignore_unused_weights
+        # Wav2Vec2 모델 초기화 (단순화)
+        self.wav2vec = Wav2Vec2Model.from_pretrained(config.model.pretrained)
+        
+        # 분류기 레이어 분리
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(self.wav2vec.config.hidden_size, config.model.classifier.hidden_size),
+            nn.LayerNorm(config.model.classifier.hidden_size),
+            nn.GELU(),
+            nn.Dropout(config.model.classifier.dropout)
         )
         
-        # 분류기 레이어
-        self.classifier = nn.Sequential(
-            nn.Linear(self.wav2vec.config.hidden_size, config.model.classifier.hidden_size),
-            nn.BatchNorm1d(config.model.classifier.hidden_size),
-            nn.ReLU(),
-            nn.Dropout(config.model.classifier.dropout),
-            nn.Linear(config.model.classifier.hidden_size, config.model.classifier.hidden_size // 2),
-            nn.BatchNorm1d(config.model.classifier.hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(config.model.classifier.dropout),
-            nn.Linear(config.model.classifier.hidden_size // 2, config.dataset.num_classes)
-        )
+        self.classifier_head = nn.Linear(config.model.classifier.hidden_size, config.dataset.num_classes)
         
         # Freezing 설정 적용
         if config.model.freeze.enabled:
@@ -92,7 +86,7 @@ class Wav2VecEmotionModel(pl.LightningModule):
             logging.info(f"Trainable parameters: {trainable_params:,}")
             logging.info(f"Frozen parameters: {total_params - trainable_params:,}")
     
-    def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, batch: Dict[str, torch.Tensor], return_features: bool = False) -> torch.Tensor:
         """Forward pass"""
         audio = batch["audio"]
         if self.config.debug.enabled and self.config.debug.log_shapes:
@@ -107,18 +101,18 @@ class Wav2VecEmotionModel(pl.LightningModule):
         if self.config.debug.enabled and self.config.debug.log_shapes:
             logging.info(f"Processed input shape: {audio.shape}")
         
-        # wav2vec2 forward pass
+        # wav2vec2 feature extraction (frozen)
         audio_features = self.wav2vec(audio).last_hidden_state
-        if self.config.debug.enabled and self.config.debug.log_shapes:
-            logging.info(f"Wav2vec output shape: {audio_features.shape}")
+        embeddings = torch.mean(audio_features, dim=1)  # [batch_size, hidden_size]
         
-        # Mean pooling
-        embeddings = torch.mean(audio_features, dim=1)
-        if self.config.debug.enabled and self.config.debug.log_shapes:
-            logging.info(f"After pooling shape: {embeddings.shape}")
+        # 분류기 feature extraction
+        features = self.feature_extractor(embeddings)  # [batch_size, classifier_hidden_size]
         
-        # Classification
-        logits = self.classifier(embeddings)
+        if return_features:
+            return features  # Late fusion을 위한 feature 반환
+            
+        # 최종 분류
+        logits = self.classifier_head(features)
         if self.config.debug.enabled and self.config.debug.log_shapes:
             logging.info(f"Final output shape: {logits.shape}")
         
@@ -144,14 +138,8 @@ class Wav2VecEmotionModel(pl.LightningModule):
         loss = F.cross_entropy(outputs, batch["label"])
         self.test_metrics.update(outputs, batch["label"])
         
-        # loss와 함께 다른 메트릭도 로깅
+        # test_loss만 로깅
         self.log("test_loss", loss, prog_bar=True)
-        
-        # 배치별 f1 score 계산 및 로깅 (선택사항)
-        with torch.no_grad():
-            preds = torch.argmax(outputs, dim=1)
-            f1 = f1_score(batch["label"].cpu(), preds.cpu(), average='macro')
-            self.log("test_batch_f1", f1, prog_bar=True)
         
         return loss
     
@@ -195,6 +183,11 @@ class Wav2VecEmotionModel(pl.LightningModule):
 
     def on_test_epoch_start(self):
         self.test_metrics.set_epoch(self.current_epoch)
+    
+    def extract_features(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Late fusion을 위한 feature extraction 메서드"""
+        with torch.no_grad():  # 추론 시에는 gradient 계산 불필요
+            return self(batch, return_features=True)
     
 # num_unfrozen_layers: 0일 때는 embedding만 사용 (모든 레이어 고정)
 # num_unfrozen_layers: N일 때는 상위 N개 레이어만 학습

@@ -22,23 +22,51 @@ class DatasetDownloader:
     
     @classmethod
     def download_and_extract(cls, dataset_name: str, root_dir: str):
+        """데이터셋 다운로드 및 압축 해제"""
         root_dir = Path(root_dir)
+        root_dir.mkdir(parents=True, exist_ok=True)
         
-        # 더 엄격한 존재 여부 체크
         if dataset_name == "ravdess":
             if (root_dir / "Actor_01").exists() and any((root_dir / "Actor_01").iterdir()):
                 logging.info(f"RAVDESS dataset already exists at {root_dir}")
-                return
+                return True
+            return cls._download_ravdess(root_dir)
+            
         elif dataset_name == "fer2013":
-            if (root_dir / "train").exists() and any((root_dir / "train").iterdir()):
+            if (root_dir / "fer2013.csv").exists():
                 logging.info(f"FER2013 dataset already exists at {root_dir}")
-                return
+                return True
                 
-        # 데이터셋별 다운로드 로직
-        if dataset_name == "ravdess":
-            cls._download_ravdess(root_dir)
-        elif dataset_name == "fer2013":
-            cls._download_fer2013(root_dir)
+            try:
+                # Kaggle API 인증
+                load_dotenv()
+                kaggle.api.authenticate()
+                
+                # 데이터셋 다운로드
+                logging.info("Downloading FER2013 dataset...")
+                kaggle.api.dataset_download_file(
+                    dataset="deadskull7/fer2013",
+                    file_name="fer2013.csv",
+                    path=str(root_dir)
+                )
+                
+                # 압축 해제
+                zip_path = root_dir / "fer2013.csv.zip"
+                if zip_path.exists():
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(root_dir)
+                    zip_path.unlink()  # 압축 파일 삭제
+                
+                return True
+                
+            except Exception as e:
+                logging.error(f"Error downloading FER2013: {e}")
+                logging.info(
+                    "Please ensure you have set KAGGLE_USERNAME and KAGGLE_KEY "
+                    "in your .env file or manually download from: "
+                    "https://www.kaggle.com/datasets/deadskull7/fer2013"
+                )
+                raise
         else:
             raise ValueError(f"Unknown dataset: {dataset_name}")
         
@@ -130,36 +158,60 @@ class DatasetDownloader:
 
     @staticmethod
     def _download_ravdess(root_dir: Path):
+        """RAVDESS 데이터셋 다운로드"""
+        # 이미 데이터가 존재하는지 확인
+        metadata_path = root_dir / "ravdess_metadata.csv"
+        if metadata_path.exists() and list(root_dir.glob("Actor_*")):
+            logging.info(f"Dataset already exists at {root_dir}")
+            return True
+        
         try:
-            # Kaggle API 인증
-            load_dotenv()
-            os.environ['KAGGLE_USERNAME'] = os.getenv('KAGGLE_USERNAME')
-            os.environ['KAGGLE_KEY'] = os.getenv('KAGGLE_KEY')
+            # 임시 디렉토리 생성
+            temp_dir = root_dir / "temp_download"
+            temp_dir.mkdir(parents=True, exist_ok=True)
             
-            if not os.getenv('KAGGLE_USERNAME') or not os.getenv('KAGGLE_KEY'):
-                raise ValueError("Kaggle credentials not found in .env file")
-            
-            # 데이터셋 다운로드
-            kaggle.api.authenticate()
-            kaggle.api.dataset_download_files(
-                'uwrfkaggler/ravdess-emotional-speech-audio',
-                path=str(root_dir),
-                unzip=True
-            )
-            
-            # audio_speech_actors_01-24 폴더에서 파일들을 root_dir로 이동
-            src_dir = root_dir / "audio_speech_actors_01-24"
-            if src_dir.exists():
-                for item in src_dir.iterdir():
-                    if item.is_dir():
-                        shutil.move(str(item), str(root_dir))
-                shutil.rmtree(str(src_dir))
-            
-            logging.info(f"Dataset downloaded and extracted to {root_dir}")
-            
+            try:
+                # Kaggle API 인증
+                load_dotenv()
+                kaggle.api.authenticate()
+                
+                # 데이터셋 다운로드 (임시 디렉토리에)
+                logging.info("Downloading RAVDESS dataset...")
+                kaggle.api.dataset_download_files(
+                    'uwrfkaggler/ravdess-emotional-speech-audio',
+                    path=str(temp_dir),
+                    unzip=True
+                )
+                
+                # Actor 폴더들을 최종 위치로 이동
+                src_dir = temp_dir / "audio_speech_actors_01-24"
+                if src_dir.exists():
+                    logging.info("Moving files to final location...")
+                    for item in src_dir.glob("Actor_*"):
+                        dest_path = root_dir / item.name
+                        if not dest_path.exists():  # 이미 존재하지 않는 경우에만 이동
+                            shutil.move(str(item), str(root_dir))
+                
+                # 메타데이터 생성
+                logging.info("Generating metadata file...")
+                success = DatasetDownloader._generate_ravdess_metadata(root_dir)
+                if not success:
+                    raise RuntimeError("Failed to generate metadata file")
+                
+                return True
+                
+            finally:
+                # 임시 파일 및 디렉토리 정리
+                logging.info("Cleaning up temporary files...")
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                
         except Exception as e:
             logging.error(f"Error downloading RAVDESS dataset: {str(e)}")
-            raise
+            # 실패 시 메타데이터 파일 삭제
+            if metadata_path.exists():
+                metadata_path.unlink()
+            return False
 
     @staticmethod
     def _generate_ravdess_metadata(root_dir: Path) -> bool:

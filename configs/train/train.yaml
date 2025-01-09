@@ -1,12 +1,41 @@
-max_epochs: 1
-batch_size: 16
-num_workers: 4
-learning_rate: 1e-4
-weight_decay: 1e-4
+max_epochs: 5
+batch_size: 24
+num_workers: 2
+learning_rate: 5e-5
+weight_decay: 5e-4
 gradient_clip_val: 1.0
-accumulate_grad_batches: 1
+accumulate_grad_batches: 3
+
+early_stopping:
+  enabled: true
+  monitor: "val_loss"
+  patience: 15
+  mode: "min"
+  min_delta: 5e-5
+
+model_checkpoint:
+  monitor: "val_loss"
+  mode: "min"
+  save_top_k: 3
 
 scheduler:
   enabled: true
   type: "cosine"
-  warmup_epochs: 5
+  warmup_epochs: 3
+  T_max: 50
+  eta_min: 1e-7
+
+# 메모리 관리 설정 추가
+memory_management:
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+
+# 데이터로더 설정
+dataloader:
+  shuffle: true
+  drop_last: false
+
+mixed_precision:
+  enabled: true
+  precision: "16-mixed"

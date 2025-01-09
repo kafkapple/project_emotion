@@ -22,8 +22,8 @@ class RavdessDataset(BaseDataset):
         self.root_dir = Path(config.dataset.root_dir)
         self.sample_rate = config.dataset.audio.sample_rate
         self.duration = config.dataset.audio.duration
-        self.feature_type = config.dataset.audio.feature_type
-        self.n_mfcc = config.dataset.audio.n_mfcc
+        self.max_length = config.dataset.audio.max_length
+        self.normalize = config.dataset.audio.normalize
         self.augmentation = config.dataset.augmentation
         
         # 클래스 정보 초기화 (필터링 적용)
@@ -34,9 +34,13 @@ class RavdessDataset(BaseDataset):
         # 데이터셋 로드 및 필터링
         self.samples = self._load_dataset()
         
-        # config 업데이트 - 실제 사용되는 클래스 정보로 갱신
+        # config 업데이트
         self.config.dataset.class_names = self.class_names
         self.config.dataset.num_classes = self.num_classes
+        
+        # 클래스별 샘플 수 계산
+        self.class_counts = self.samples['emotion'].value_counts()
+        self.target_samples = int(self.class_counts.max() * config.dataset.augmentation.get('balance_ratio', 1.0))
 
     def _get_filtered_class_names(self) -> List[str]:
         """필터링이 적용된 클래스 이름 목록 반환"""
@@ -72,17 +76,51 @@ class RavdessDataset(BaseDataset):
         return True
         
     def _apply_split(self, df: pd.DataFrame) -> pd.DataFrame:
-        """이터셋 분할 적용"""
-        df_split = df.copy()
+        """데이터셋 분할 적용"""
+        # splits.method로 경로 변경
+        split_method = self.config.dataset.splits.method
         
-        if self.config.dataset.split_method == "random":
-            return self._apply_random_split(df_split)
-        elif self.config.dataset.split_method == "kfold":
-            return self._apply_kfold_split(df_split)
-        elif self.config.dataset.split_method == "stratified":
-            return self._apply_stratified_split(df_split)
+        if split_method == "random":
+            return self._apply_random_split(df)
+        elif split_method == "kfold":
+            return self._apply_kfold_split(df)
+        elif split_method == "stratified":
+            # StratifiedKFold로 변경
+            k = self.config.dataset.splits.k_folds
+            current_fold = self.config.dataset.splits.current_fold
+            
+            skf = StratifiedKFold(
+                n_splits=k, 
+                shuffle=True, 
+                random_state=self.config.dataset.seed
+            )
+            
+            # 현재 fold에 해당하는 분할 찾기
+            for i, (train_idx, test_idx) in enumerate(skf.split(df, df['emotion'])):
+                if i == current_fold:
+                    train_val_df = df.iloc[train_idx]
+                    test_df = df.iloc[test_idx]
+                    
+                    # Train-Val 분할도 stratified하게
+                    val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
+                    train_df, val_df = train_test_split(
+                        train_val_df,
+                        test_size=val_ratio,
+                        stratify=train_val_df['emotion'],
+                        random_state=self.config.dataset.seed
+                    )
+                    
+                    # Split 정보 추가
+                    df_split = df.copy()
+                    df_split['split'] = self.config.dataset.splits.train  # 기본값
+                    df_split.loc[val_df.index, 'split'] = self.config.dataset.splits.val
+                    df_split.loc[test_df.index, 'split'] = self.config.dataset.splits.test
+                    
+                    return df_split
+                    
+            raise ValueError(f"Invalid fold number: {current_fold}")
         else:
-            raise ValueError(f"Unknown split method: {self.config.dataset.split_method}")
+            raise ValueError(f"Unknown split method: {split_method}")
 
     def _apply_random_split(self, df: pd.DataFrame) -> pd.DataFrame:
         """랜덤 분할"""
@@ -139,45 +177,6 @@ class RavdessDataset(BaseDataset):
                 return df_split
                 
         raise ValueError(f"Invalid fold number: {fold}")
-
-    def _apply_stratified_split(self, df: pd.DataFrame) -> pd.DataFrame:
-        """계층적 K-Fold 분할"""
-        # 먼저 train+val과 test로 분할
-        train_val_df, test_df = train_test_split(
-            df,
-            test_size=self.config.dataset.splits.ratios.test,
-            random_state=self.config.dataset.seed,
-            stratify=df['emotion']
-        )
-        
-        # 그 다음 train과 val로 분할
-        # val_ratio를 train+val 기준으로 재계산
-        val_ratio = self.config.dataset.splits.ratios.val / (1 - self.config.dataset.splits.ratios.test)
-        train_df, val_df = train_test_split(
-            train_val_df,
-            test_size=val_ratio,
-            random_state=self.config.dataset.seed,
-            stratify=train_val_df['emotion']
-        )
-        
-        # Split 정보 추가
-        df_split = df.copy()
-        df_split['split'] = self.config.dataset.splits.train  # 기본값을 train으로
-        df_split.loc[val_df.index, 'split'] = self.config.dataset.splits.val
-        df_split.loc[test_df.index, 'split'] = self.config.dataset.splits.test
-        
-        # 각 분할의 클��스 분포 확인을 위한 로깅
-        logging.info("\nClass distribution in splits:")
-        for split_name, split_df in [
-            ("Train", train_df), 
-            ("Val", val_df), 
-            ("Test", test_df)
-        ]:
-            class_dist = split_df['emotion'].value_counts()
-            logging.info(f"\n{split_name} set class distribution:")
-            logging.info(class_dist)
-        
-        return df_split
 
     def _load_dataset(self) -> pd.DataFrame:
         """데이터셋 로드 및 필터링"""
@@ -249,9 +248,9 @@ class RavdessDataset(BaseDataset):
         if self.config.debug.enabled and self.config.debug.log_shapes:
             logging.info(f"4. After length adjustment shape: {waveform.shape}")
         
-        # Augmentation 적용
-        if self.split == 'train' and self.config.dataset.augmentation.enabled:
-            waveform = self._apply_augmentation(waveform)
+        # Augmentation 적용 (클래스 불균형 고려)
+        if self.augmentation.enabled and self.split == 'train':
+            waveform = self._apply_augmentation(waveform, sample['emotion'])
             if self.config.debug.enabled and self.config.debug.log_shapes:
                 logging.info(f"5. After augmentation shape: {waveform.shape}")
         
@@ -266,7 +265,8 @@ class RavdessDataset(BaseDataset):
         
         return {
             "audio": waveform,
-            "label": torch.tensor(label, dtype=torch.long)
+            "label": torch.tensor(label, dtype=torch.long),
+            "emotion": sample['emotion']
         }
 
     def _generate_ravdess_metadata(root_dir: Path) -> bool:
@@ -342,27 +342,42 @@ class RavdessDataset(BaseDataset):
         logging.info(f"Metadata saved to {metadata_path}")
         return True
 
-    def _apply_augmentation(self, waveform: torch.Tensor) -> torch.Tensor:
-        """오디오 파형에 augmentation 적용"""
+    def _apply_augmentation(self, waveform: torch.Tensor, emotion: str) -> torch.Tensor:
+        """오디오 augmentation 적용 (클래스 불균형 고려)"""
         if not self.config.dataset.augmentation.enabled or self.split != 'train':
             return waveform
         
-        aug_config = self.config.dataset.augmentation
+        # 현재 클래스의 샘플 수
+        current_samples = self.class_counts[emotion]
         
-        # 가우시안 노이즈 추가
-        if aug_config.noise.enabled:
-            noise = torch.randn_like(waveform) * aug_config.noise.noise_level
-            waveform = waveform + noise
+        # augmentation 횟수 계산
+        num_aug = max(0, min(
+            self.config.dataset.augmentation.get('max_augmentations', 3),
+            (self.target_samples - current_samples) // current_samples
+        ))
         
-        # 볼륨 변경
-        if aug_config.volume.enabled:
-            gain = torch.FloatTensor(1).uniform_(
-                aug_config.volume.min_gain,
-                aug_config.volume.max_gain
-            )
-            waveform = waveform * gain
-        
-        return waveform
+        augmented = waveform
+        for _ in range(num_aug):
+            if self.config.dataset.augmentation.noise.enabled:
+                noise = torch.randn_like(waveform) * self.config.dataset.augmentation.noise.noise_level
+                augmented = augmented + noise
+            
+            if self.config.dataset.augmentation.volume.enabled:
+                gain = torch.FloatTensor(1).uniform_(
+                    self.config.dataset.augmentation.volume.min_gain,
+                    self.config.dataset.augmentation.volume.max_gain
+                )
+                augmented = augmented * gain
+            
+            if self.config.dataset.augmentation.pitch_shift.enabled:
+                # pitch shift 구현
+                pass
+            
+            if self.config.dataset.augmentation.time_mask.enabled:
+                # time mask 구현
+                pass
+            
+        return augmented
 
     @classmethod
     def create_filtered_dataset(cls, 

@@ -1,8 +1,9 @@
 defaults:
-  - dataset: ravdess #
-  - model: wav2vec
-  - train: train
   - _self_
+  - train: train
+  - model: wav2vec
+  - dataset: ravdess
+  - metrics: metrics
 
 debug:
   enabled: false
@@ -11,7 +12,7 @@ debug:
   model_summary: false
 
 project:
-  name: "joon_test_multimodal_emotion"
+  name: "joon_wandb_llm_test"
   timestamp: ${now:%Y%m%d_%H%M%S}
   hydra_cwd: ${hydra:runtime.cwd}
 dirs:

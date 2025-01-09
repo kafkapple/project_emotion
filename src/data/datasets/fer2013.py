@@ -12,86 +12,60 @@ from dotenv import load_dotenv
 from src.data.utils.download import DatasetDownloader
 from src.data.datasets.base import BaseDataset
 import random
+import pandas as pd
+import numpy as np
 
 class FER2013Dataset(BaseDataset):
     def __init__(self, config: Dict[str, Any], split: str = 'train'):
         super().__init__(config, split)
         
-        self.image_size = config.dataset.image.size
-        self.transform = self._get_transforms()
+        self.root_dir = Path(config.dataset.root_dir)
+        self.csv_path = self.root_dir / "fer2013.csv"
         
-        # 전체 train 데이터 로드
-        if split == "test":
-            self.samples = self._collect_samples("test")
-        else:
-            # train 데이터를 train/val로 분할
-            all_train_samples = self._collect_samples("train")
-            train_size = int(len(all_train_samples) * config.dataset.splits.ratios.train)
-            
-            # 랜덤 시드 설정
-            random.seed(config.dataset.seed)
-            indices = list(range(len(all_train_samples)))
-            random.shuffle(indices)
-            
-            if split == "train":
-                split_indices = indices[:train_size]
-            else:  # val
-                split_indices = indices[train_size:]
-                
-            self.samples = [all_train_samples[i] for i in split_indices]
-    
-    def _collect_samples(self, split_name: str) -> List[Tuple[Path, int]]:
-        """데이터셋 샘플 수집"""
-        samples = []
-        split_dir = self.root_dir / split_name
+        # split 매핑
+        self.split_map = {
+            'train': 'Training',
+            'val': 'PublicTest',
+            'test': 'PrivateTest'
+        }
         
-        if not split_dir.exists():
-            raise FileNotFoundError(f"Directory not found: {split_dir}")
+        # 데이터 로드
+        self.samples = self._load_dataset()
+        
+    def _load_dataset(self) -> pd.DataFrame:
+        """CSV 파일에서 데이터 로드"""
+        if not self.csv_path.exists():
+            raise FileNotFoundError(f"CSV file not found: {self.csv_path}")
             
-        # 각 클래스 디렉토리에서 이미지 수집
-        for class_idx, class_name in enumerate(self.config.dataset.class_names):
-            class_dir = split_dir / class_name
-            if not class_dir.exists():
-                continue
-                
-            for img_path in class_dir.glob("*.jpg"):  # 또는 다른 이미지 확장자
-                samples.append((img_path, class_idx))
-                
-        return samples
-    
-    def _get_transforms(self):
-        """데이터 변환 설정"""
-        if self.split == 'train' and self.config.dataset.augmentation.enabled:
-            return transforms.Compose([
-                transforms.RandomRotation(self.config.dataset.augmentation.rotation_range),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomResizedCrop(
-                    self.config.dataset.image.size,
-                    scale=(0.8, 1.0)
-                ),
-                transforms.ToTensor(),
-                transforms.Normalize(self.config.dataset.image.mean, 
-                                  self.config.dataset.image.std)
-            ])
-        else:
-            return transforms.Compose([
-                transforms.Resize(self.config.dataset.image.size),
-                transforms.ToTensor(),
-                transforms.Normalize(self.config.dataset.image.mean, 
-                                  self.config.dataset.image.std)
-            ])
-    
+        # CSV 파일 읽기
+        df = pd.read_csv(self.csv_path)
+        
+        # 현재 split에 해당하는 데이터만 필터링
+        split_name = self.split_map[self.split]
+        df = df[df['Usage'] == split_name].copy()
+        
+        # pixels 문자열을 numpy array로 변환
+        df['pixels'] = df['pixels'].apply(lambda x: np.array([int(p) for p in x.split()]))
+        
+        return df
+        
     def __len__(self):
         return len(self.samples)
-    
-    def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
-        image = Image.open(img_path).convert('L')  # grayscale로 로드
         
-        if self.transform:
-            image = self.transform(image)
+    def __getitem__(self, idx):
+        """단일 샘플 반환"""
+        sample = self.samples.iloc[idx]
+        
+        # 이미지 변환
+        image = sample['pixels'].reshape(48, 48).astype(np.float32)
+        image = torch.from_numpy(image)
+        image = image.unsqueeze(0)  # Add channel dimension
+        
+        # 정규화
+        if self.config.dataset.normalize:
+            image = image / 255.0
             
         return {
-            'image': image,
-            'label': torch.tensor(label, dtype=torch.long)
+            "image": image,
+            "label": torch.tensor(sample['emotion'], dtype=torch.long)
         }
