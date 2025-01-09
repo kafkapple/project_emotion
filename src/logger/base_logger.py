@@ -12,32 +12,40 @@ class Logger:
         self._setup_wandb_config()
     
     def _setup_wandb_config(self):
-        """WandB에 로깅할 주요 설정만 선택"""
-        wandb_config = {
-            # 모델 정보
-            "model": {
-                "name": self.config.model.name,
-                "architecture": self.config.model.get("architecture", None),
-                "pretrained": self.config.model.get("pretrained", None),
-            },
+        """WandB 설정 초기화"""
+        self.wandb_config = {
+            # 기본 학습 설정
+            "batch_size": self.config.train.batch_size,
+            "max_epochs": self.config.train.max_epochs,
+            "learning_rate": self.config.train.learning_rate,
+            "num_workers": self.config.train.num_workers,
             
-            # 데이터셋 정보
-            "dataset": {
-                "name": self.config.dataset.name,
-                "num_classes": self.config.dataset.num_classes,
-                "class_names": self.config.dataset.class_names,
-                "filtering": self.config.dataset.filtering if hasattr(self.config.dataset, "filtering") else None,
-            },
+            # 옵티마이저 설정
+            "optimizer": self.config.train.optimizer.name,
+            "weight_decay": self.config.train.optimizer.weight_decay,
             
-            # 학습 설정
-            "train": {
-                "max_epochs": self.config.train.max_epochs,
-                "batch_size": self.config.train.batch_size,
-                "learning_rate": self.config.train.learning_rate,
-                "weight_decay": self.config.train.weight_decay,
-            }
+            # 스케줄러 설정
+            "scheduler": self.config.train.scheduler.name,
+            "warmup_epochs": self.config.train.scheduler.warmup_epochs,
+            "min_lr": self.config.train.scheduler.min_lr,
+            
+            # 메모리 관리 설정
+            "gradient_clip_val": self.config.train.memory_management.gradient_clip_val,
+            "accumulate_grad_batches": self.config.train.memory_management.accumulate_grad_batches,
+            "precision": self.config.train.memory_management.precision,
+            
+            # Early stopping 설정
+            "early_stopping_patience": self.config.train.early_stopping.patience,
+            "early_stopping_min_delta": self.config.train.early_stopping.min_delta,
+            
+            # 로깅 설정
+            "logging_interval": self.config.train.logging.step_interval,
+            
+            # 모델 설정
+            "model_name": self.config.model.name,
+            "model_config": dict(self.config.model)
         }
         
         # wandb config 업데이트
         if wandb.run is not None:
-            wandb.config.update(wandb_config)
+            wandb.config.update(self.wandb_config)

@@ -35,8 +35,6 @@ class ModelFactory:
         # 모델 생성
         if model_name == "wav2vec" or config.model.architecture == "wav2vec2":
             return Wav2VecEmotionModel(config)
-        elif model_name == "resnet":
-            return PretrainedImageModel(config)
         elif model_name == "efficientnet":
             return PretrainedImageModel(config)
         else:

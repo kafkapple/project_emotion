@@ -44,6 +44,14 @@ class FER2013Dataset(BaseDataset):
         split_name = self.split_map[self.split]
         df = df[df['Usage'] == split_name].copy()
         
+        # 레이블 확인
+        unique_labels = sorted(df['emotion'].unique())
+        if len(unique_labels) != self.config.dataset.num_classes:
+            raise ValueError(
+                f"Number of classes in data ({len(unique_labels)}) "
+                f"does not match config ({self.config.dataset.num_classes})"
+            )
+        
         # pixels 문자열을 numpy array로 변환
         df['pixels'] = df['pixels'].apply(lambda x: np.array([int(p) for p in x.split()]))
         
@@ -62,7 +70,11 @@ class FER2013Dataset(BaseDataset):
         image = image.unsqueeze(0)  # Add channel dimension
         
         # 정규화
-        if self.config.dataset.normalize:
+        if self.config.dataset.image.normalize:
+            # [-1, 1] 범위로 정규화
+            image = (image / 255.0 - self.config.dataset.image.mean[0]) / self.config.dataset.image.std[0]
+        else:
+            # [0, 1] 범위로 정규화
             image = image / 255.0
             
         return {
