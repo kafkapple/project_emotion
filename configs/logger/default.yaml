@@ -1,0 +1,11 @@
+# WandB 로거 설정
+wandb:
+  enabled: true
+  project_name: ${project.name}
+  entity: "ailab_upstage_fastcampus"
+  tags: ["emotion", "image", "fer2013"]
+
+# 콘솔 로거 설정
+console:
+  enabled: true
+  level: "INFO" 

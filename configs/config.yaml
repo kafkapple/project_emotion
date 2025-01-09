@@ -1,9 +1,22 @@
 defaults:
   - _self_
-  - train: train
-  - model: wav2vec
   - dataset: ravdess
+  - model: wav2vec
+  - train: train
   - metrics: metrics
+  - logger: default
+  - dirs: default
+
+# 글로벌 설정
+settings:
+  precision: "32"  # "16" or "32"
+  torch_dtype: "float32"
+
+# 실험 설정
+experiment:
+  name: "ravdess_wav2vec"
+  tags: ["audio", "emotion", "ravdess"]
+  seed: 42
 
 debug:
   enabled: false
@@ -27,6 +40,10 @@ logger:
 
 logging:
   project_name: "multimodal-emotion"
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  show_separator: false  # 구분선 출력 여부
+  show_timestamp: false  # 타임스탬프 출력 여부
+  show_model_summary: false  # 모델 구조 출력 여부
 
 
 model_manager:

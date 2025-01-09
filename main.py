@@ -76,12 +76,13 @@ def train(config: DictConfig):
         devices=1,
         callbacks=callbacks,
         logger=wandb_logger if config.logger.wandb.enabled else None,
-        val_check_interval=1.0,  # 매 epoch마다 validation 실행
-        check_val_every_n_epoch=1,  # 매 epoch마다 validation 실행
-        num_sanity_val_steps=2,  # validation sanity check 실행
+        val_check_interval=1.0,
+        check_val_every_n_epoch=1,
+        num_sanity_val_steps=0,
         gradient_clip_val=config.train.memory_management.gradient_clip_val,
         accumulate_grad_batches=config.train.memory_management.accumulate_grad_batches,
-        deterministic=True
+        deterministic=True,
+        precision=config.settings.precision
     )
     
     # 학습 실행 시 validation 데이터 로더 확인 및 실행

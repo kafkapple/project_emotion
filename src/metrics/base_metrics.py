@@ -32,14 +32,22 @@ class BaseEmotionMetrics:
         self.all_labels = []
         self.all_probs = []
         
-    def update(self, logits: torch.Tensor, labels: torch.Tensor):
-        with torch.no_grad():
-            probs = torch.softmax(logits, dim=1)
-            preds = torch.argmax(logits, dim=1)
-            
-            self.all_preds.extend(preds.cpu().numpy())
-            self.all_labels.extend(labels.cpu().numpy())
-            self.all_probs.extend(probs.cpu().numpy())
+    def update(self, preds: torch.Tensor, labels: torch.Tensor):
+        """예측값과 레이블 업데이트"""
+        if isinstance(preds, torch.Tensor):
+            if preds.dim() > 1:  # logits인 경우
+                preds = torch.argmax(preds, dim=1)
+            preds = preds.cpu().numpy()
+        
+        if isinstance(labels, torch.Tensor):
+            labels = labels.cpu().numpy()
+        
+        # 디버깅을 위한 로그 추가
+        logging.debug(f"Updating metrics - Predictions shape: {preds.shape}, Labels shape: {labels.shape}")
+        logging.debug(f"Current accumulated predictions: {len(self.all_preds)}, labels: {len(self.all_labels)}")
+        
+        self.all_preds.extend(preds)
+        self.all_labels.extend(labels)
     
     def _get_unique_labels(self) -> List[int]:
         """실제 데이터에 존재하는 클래스 레이블 반환"""
@@ -286,3 +294,15 @@ class BaseEmotionMetrics:
                 results['test_score'] = metrics_dict[main_key]
             
         return results 
+
+    def get_classification_report(self) -> str:
+        """현재 에포크의 classification report 반환"""
+        if not self.all_labels or not self.all_preds:
+            return "No predictions available"
+        
+        return classification_report(
+            self.all_labels,  # 이미 numpy array
+            self.all_preds,   # 이미 numpy array
+            target_names=self.class_names,
+            zero_division=0
+        ) 

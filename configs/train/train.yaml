@@ -1,7 +1,7 @@
 # 학습 기본 설정
 batch_size: 32
 num_workers: 4
-max_epochs: 30
+max_epochs: 3
 learning_rate: 0.001
 
 # 데이터로더 설정
@@ -28,7 +28,7 @@ scheduler:
 memory_management:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  precision: 32
+  precision: "32"  # 직접 값 설정 또는 ${settings.precision} 사용
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 2

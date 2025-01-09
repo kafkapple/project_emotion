@@ -14,10 +14,12 @@ from src.data.datasets.base import BaseDataset
 import random
 import pandas as pd
 import numpy as np
+import torchvision.transforms.functional as TF
 
 class FER2013Dataset(BaseDataset):
-    def __init__(self, config: Dict[str, Any], split: str = 'train'):
+    def __init__(self, config: Dict[str, Any], split: str = 'train', transform=None):
         super().__init__(config, split)
+        self.transform = transform
         
         self.root_dir = Path(config.dataset.root_dir)
         self.csv_path = self.root_dir / "fer2013.csv"
@@ -88,6 +90,9 @@ class FER2013Dataset(BaseDataset):
             image = (image / 255.0 - self.config.dataset.image.mean[0]) / self.config.dataset.image.std[0]
         else:
             image = image / 255.0
+            
+        if self.transform:
+            image = self.transform(image)
             
         return {
             "image": image,

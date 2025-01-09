@@ -1,5 +1,6 @@
 name: "ravdess"
 root_dir: "data/ravdess"
+version: "full"  # "small" or "full"
 
 # 기본 설정
 seed: 42  # 랜덤 시드 추가
@@ -79,3 +80,14 @@ debug:
   enabled: false
   log_shapes: false
   log_values: false
+
+# 데이터셋 분할 비율
+split_ratio:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+
+# 버전별 디렉토리 설정
+version_dirs:
+  small: "small"
+  full: "full"

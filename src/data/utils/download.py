@@ -70,7 +70,10 @@ class DatasetDownloader:
         else:
             raise ValueError(f"Unknown dataset: {dataset_name}")
         
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
+        self.root_dir = Path(config.dataset.root_dir)
+        
         # Load environment variables
         load_dotenv()
         
@@ -156,82 +159,96 @@ class DatasetDownloader:
                 emotion_dir.mkdir(exist_ok=True)
                 np.save(emotion_dir / f"{idx}.npy", img)
 
-    @staticmethod
-    def _download_ravdess(root_dir: Path):
+    def download_ravdess(self):
         """RAVDESS 데이터셋 다운로드"""
-        # 이미 데이터가 존재하는지 확인
-        metadata_path = root_dir / "ravdess_metadata.csv"
-        if metadata_path.exists() and list(root_dir.glob("Actor_*")):
-            logging.info(f"Dataset already exists at {root_dir}")
-            return True
+        version = self.config.dataset.version
+        version_dir = self.root_dir / version  # small 또는 full 전용 디렉토리
+        version_dir.mkdir(parents=True, exist_ok=True)
         
-        try:
-            # 임시 디렉토리 생성
-            temp_dir = root_dir / "temp_download"
-            temp_dir.mkdir(parents=True, exist_ok=True)
+        if version == "small":
+            self._download_kaggle_ravdess(version_dir)
+        elif version == "full":
+            self._download_full_ravdess(version_dir)
+        else:
+            raise ValueError(f"Unknown dataset version: {version}")
+    
+    def _download_kaggle_ravdess(self, version_dir: Path):
+        """Kaggle의 small RAVDESS 데이터셋 다운로드"""
+        if not (version_dir / "ravdess-emotional-speech-audio").exists():
+            logging.info("Downloading RAVDESS small dataset from Kaggle...")
+            kaggle.api.authenticate()
+            kaggle.api.dataset_download_files(
+                'uwrfkaggler/ravdess-emotional-speech-audio',
+                path=version_dir,
+                unzip=True
+            )
             
-            try:
-                # Kaggle API 인증
-                load_dotenv()
-                kaggle.api.authenticate()
-                
-                # 데이터셋 다운로드 (임시 디렉토리에)
-                logging.info("Downloading RAVDESS dataset...")
-                kaggle.api.dataset_download_files(
-                    'uwrfkaggler/ravdess-emotional-speech-audio',
-                    path=str(temp_dir),
-                    unzip=True
-                )
-                
-                # Actor 폴더들을 최종 위치로 이동
-                src_dir = temp_dir / "audio_speech_actors_01-24"
-                if src_dir.exists():
-                    logging.info("Moving files to final location...")
-                    for item in src_dir.glob("Actor_*"):
-                        dest_path = root_dir / item.name
-                        if not dest_path.exists():  # 이미 존재하지 않는 경우에만 이동
-                            shutil.move(str(item), str(root_dir))
-                
-                # 메타데이터 생성
-                logging.info("Generating metadata file...")
-                success = DatasetDownloader._generate_ravdess_metadata(root_dir)
-                if not success:
-                    raise RuntimeError("Failed to generate metadata file")
-                
-                return True
-                
-            finally:
-                # 임시 파일 및 디렉토리 정리
-                logging.info("Cleaning up temporary files...")
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                
-        except Exception as e:
-            logging.error(f"Error downloading RAVDESS dataset: {str(e)}")
-            # 실패 시 메타데이터 파일 삭제
-            if metadata_path.exists():
-                metadata_path.unlink()
-            return False
+            # 메타데이터 생성
+            self._generate_ravdess_metadata(version_dir, "small")
 
-    @staticmethod
-    def _generate_ravdess_metadata(root_dir: Path) -> bool:
-        """RAVDESS 데이터셋의 기본 메타데이터 생성"""
-        metadata_path = root_dir / "ravdess_metadata.csv"
-        
-        # 오디오 파일 존재 여부 확인
-        audio_files = list(root_dir.glob("Actor_*//*.wav"))  # Actor 폴더 경로 수정
-        if not audio_files:
-            logging.error(f"No audio files found in {root_dir}")
-            return False
+    def _download_full_ravdess(self, version_dir: Path):
+        """공식 RAVDESS 전체 데이터셋 다운로드"""
+        if not version_dir.exists() or not any(version_dir.iterdir()):
+            logging.info("Downloading RAVDESS full dataset...")
             
-        logging.info(f"Found {len(audio_files)} audio files")
+            # 데이터셋 다운로드
+            zip_path = version_dir / "ravdess_full.zip"
+            full_dataset_url = "https://zenodo.org/record/1188976/files/Audio_Speech_Actors_01-24.zip"
+            
+            os.system(f"wget {full_dataset_url} -O {zip_path}")
+            
+            # 압축 해제
+            logging.info("Extracting dataset...")
+            os.system(f"unzip {zip_path} -d {version_dir}")
+            
+            # 압축 파일 삭제
+            os.remove(zip_path)
+            
+            # 메타데이터 생성
+            self._generate_ravdess_metadata(version_dir, "full")
+            
+            logging.info("Download and extraction completed!")
+
+    def _generate_ravdess_metadata(self, version_dir: Path, version: str):
+        """RAVDESS 메타데이터 생성"""
+        metadata_path = version_dir / f"ravdess_{version}_metadata.csv"
         
-        # 데이터셋 기본 정보 수집
-        actors = set()
-        emotions = set()
+        # 오디오 파일 찾기
+        audio_files = list(version_dir.rglob("*.wav"))
+        
         metadata = []
+        for audio_path in audio_files:
+            try:
+                # 파일명 파싱 (예: 03-01-04-01-02-01-01.wav)
+                filename = audio_path.stem
+                parts = filename.split("-")
+                
+                metadata.append({
+                    'file_path': str(audio_path.relative_to(version_dir)),
+                    'emotion': self._get_emotion_label(parts[2]),
+                    'actor_id': int(audio_path.parent.name.replace("Actor_", "")),
+                    'intensity': int(parts[3]),
+                    'gender': 'female' if int(parts[6]) == 2 else 'male'
+                })
+                
+            except Exception as e:
+                logging.warning(f"Error processing file {audio_path}: {e}")
+                continue
         
-        # 감정 매핑
+        # 메타데이터를 DataFrame으로 변환 및 저장
+        df = pd.DataFrame(metadata)
+        df.to_csv(metadata_path, index=False)
+        
+        # 데이터셋 통계 출력
+        logging.info(f"\nRAVDESS {version.upper()} Dataset Statistics:")
+        logging.info(f"Total files: {len(df)}")
+        logging.info("\nEmotion distribution:")
+        logging.info(df['emotion'].value_counts())
+        logging.info("\nGender distribution:")
+        logging.info(df['gender'].value_counts())
+
+    def _get_emotion_label(self, emotion_code: str) -> str:
+        """감정 코드를 레이블로 변환"""
         emotion_map = {
             "01": "neutral",
             "02": "calm",
@@ -242,72 +259,7 @@ class DatasetDownloader:
             "07": "disgust",
             "08": "surprised"
         }
-        
-        for audio_path in audio_files:
-            if "Actor_" not in str(audio_path):
-                continue
-                
-            try:
-                # 파일명 파싱 (Actor_01/03-01-04-01-02-01-01.wav 형식)
-                actor_id = int(audio_path.parent.name.replace("Actor_", ""))
-                filename = audio_path.stem
-                parts = filename.split("-")
-                
-                emotion_code = parts[2]
-                if emotion_code not in emotion_map:
-                    continue
-                    
-                emotion = emotion_map[emotion_code]
-                
-                actors.add(actor_id)
-                emotions.add(emotion)
-                
-                metadata.append({
-                    'file_path': str(audio_path),
-                    'actor': actor_id,
-                    'vocal_channel': int(parts[1]),
-                    'emotion': emotion,
-                    'emotion_intensity': int(parts[3]),
-                    'statement': int(parts[4]),
-                    'repetition': int(parts[5]),
-                    'gender': 'female' if int(parts[6]) == 2 else 'male'
-                })
-                
-            except (IndexError, ValueError) as e:
-                logging.warning(f"Error processing file {audio_path}: {e}")
-                continue
-        
-        if not metadata:
-            logging.error("No valid audio files found")
-            return False
-        
-        # 데이터셋 기본 정보 출력
-        df = pd.DataFrame(metadata)
-        logging.info("\nRAVDESS Dataset Statistics:")
-        logging.info(f"Total number of audio files: {len(df)}")
-        logging.info(f"Number of actors: {len(actors)}")
-        logging.info(f"Emotions: {sorted(emotions)}")
-        
-        # 배우별 감정 분포
-        actor_emotion_dist = pd.crosstab(df['actor'], df['emotion'])
-        logging.info("\nEmotion distribution per actor:")
-        logging.info(f"\n{actor_emotion_dist}")
-        
-        # 성별 분포
-        gender_dist = df['gender'].value_counts()
-        logging.info("\nGender distribution:")
-        logging.info(f"\n{gender_dist}")
-        
-        # 감정별 샘플 수
-        emotion_dist = df['emotion'].value_counts()
-        logging.info("\nEmotion distribution:")
-        logging.info(f"\n{emotion_dist}")
-        
-        # 메타데이터 저장
-        df.to_csv(metadata_path, index=False)
-        logging.info(f"\nMetadata saved to {metadata_path}")
-        
-        return True
+        return emotion_map[emotion_code]
 
     def download_fer2013(self, root_dir: Path) -> bool:
         """FER2013 데이터셋 다운로드"""

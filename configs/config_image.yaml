@@ -1,12 +1,27 @@
 defaults:
   - _self_
-  - model: efficientnet
   - dataset: fer2013
+  - model: efficientnet
   - train: train
+  - metrics: metrics
   - logger: default
+  - dirs: default
 
+# 글로벌 설정
+settings:
+  precision: "32"  # "16" or "32"
+  torch_dtype: "float32"
+
+# 실험 설정
+experiment:
+  name: "fer2013_efficientnet"
+  tags: ["image", "emotion", "fer2013"]
+  seed: 42
+
+# 디버그 모드
 debug:
   enabled: false
+
   log_shapes: false
   log_values: false
   model_summary: false
@@ -36,19 +51,19 @@ model_manager:
       model_id: "ZebangCheng/Emotion-LLaMA"
       model_type: "causal_lm"
       config:
-        torch_dtype: "float16"
+        torch_dtype: "float32"
         device_map: "auto"
     llava_next:
       model_id: "llava-hf/LLaVA-NeXT-Video-7B-32K-hf"
       model_type: "processor"
       config:
-        torch_dtype: "float16"
+        torch_dtype: "float32"
         device_map: "auto"
     wav2vec:
       model_id: "facebook/wav2vec2-base"
       model_type: "processor"
       config:
-        torch_dtype: "float16"
+        torch_dtype: "float32"
 
 hydra:
   run:
@@ -56,4 +71,3 @@ hydra:
   output_subdir: null
   job:
     chdir: false
-

@@ -1,0 +1,11 @@
+# 기본 디렉토리 설정
+root: "data"
+outputs: "outputs"
+logs: "logs"
+checkpoints: "checkpoints"
+cache: "cache"
+
+# 모델 관리
+model_manager:
+  base_path: "models"
+  version_control: true 

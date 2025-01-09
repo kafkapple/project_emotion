@@ -48,18 +48,18 @@ class Wav2VecEmotionModel(pl.LightningModule):
         self.val_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         self.test_metrics = AudioEmotionMetrics(config.dataset.num_classes, config.dataset.class_names, config)
         
-        # Debug 모드 출력 주석 처리
-        # if config.debug.enabled:
-        #     logging.info("\nModel Architecture:")
-        #     logging.info(f"{'='*50}")
-        #     logging.info(f"{self}")
-        #     logging.info(f"{'='*50}\n")
-        #     
-        #     # 파라미터 수 출력
-        #     total_params = sum(p.numel() for p in self.parameters())
-        #     trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        #     logging.info(f"Total parameters: {total_params:,}")
-        #     logging.info(f"Trainable parameters: {trainable_params:,}\n")
+        # 모델 구조 출력 제어
+        if config.logging.get('show_model_summary', False):
+            logging.info("\nModel Architecture:")
+            logging.info(f"{'='*50}")
+            logging.info(f"{self}")
+            logging.info(f"{'='*50}\n")
+            
+            # 파라미터 수 출력
+            total_params = sum(p.numel() for p in self.parameters())
+            trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            logging.info(f"Total parameters: {total_params:,}")
+            logging.info(f"Trainable parameters: {trainable_params:,}\n")
     
     def _freeze_layers(self):
         """레이어 고정 설정"""
@@ -153,30 +153,42 @@ class Wav2VecEmotionModel(pl.LightningModule):
     
     def on_train_epoch_end(self):
         """Train epoch 종료시 메트릭스 계산 및 로깅"""
+        current_epoch = self.current_epoch + 1
+        logging.info(f"\nTrain Epoch {current_epoch} Classification Report:")
+        logging.info(self.train_metrics.get_classification_report())
+        
         metrics = self.train_metrics.compute(prefix="train")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
-        self.train_metrics.log_metrics("train")
-        self.train_metrics.reset()
         
+        self.train_metrics.reset()
+    
     def on_validation_epoch_end(self):
         """Validation epoch 종료시 메트릭스 계산 및 로깅"""
+        current_epoch = self.current_epoch + 1
+        logging.info(f"\nValidation Epoch {current_epoch} Classification Report:")
+        logging.info(self.val_metrics.get_classification_report())
+        
         metrics = self.val_metrics.compute(prefix="validation")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
+        
         self.val_metrics.reset()
         
     def on_test_epoch_end(self):
-        metrics = self.test_metrics.compute(prefix="test_")
+        metrics = self.test_metrics.compute(prefix="test")
+        self.test_metrics.reset()
         
-        # 모든 메트릭 로깅
+        # 모든 메트릭스 로깅
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
         
-        self.test_metrics.reset()
-        
-        # config에 설정된 메트릭 반환
-        return self.test_metrics.get_test_results(metrics)
+        # 주요 메트릭 반환
+        return {
+            "test/macro_f1": metrics["test/macro_f1"],
+            "test/weighted_f1": metrics["test/weighted_f1"],
+            "test/accuracy": metrics["test/accuracy"]
+        }
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -186,17 +198,20 @@ class Wav2VecEmotionModel(pl.LightningModule):
         return optimizer
     
     def on_train_epoch_start(self):
-        self.train_metrics.set_epoch(self.current_epoch)
-        logging.info(f"\nStarting Epoch {self.current_epoch}/{self.trainer.max_epochs}")
+        current_epoch = self.current_epoch + 1
+        max_epochs = self.trainer.max_epochs
+        self.train_metrics.set_epoch(current_epoch)
+        logging.info(f"\nStarting Epoch {current_epoch}/{max_epochs}")
 
     def on_validation_epoch_start(self):
         """Validation epoch 시작시 메트릭스 초기화"""
+        current_epoch = self.current_epoch + 1
         self.val_metrics.reset()
-        self.val_metrics.set_epoch(self.current_epoch)
-        logging.info(f"\nStarting Validation Epoch {self.current_epoch}")
+        self.val_metrics.set_epoch(current_epoch)
+        logging.info(f"\nStarting Validation Epoch {current_epoch}")
 
     def on_test_epoch_start(self):
-        self.test_metrics.set_epoch(self.current_epoch)
+        self.test_metrics.set_epoch(self.current_epoch + 1)
     
     def extract_features(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """Late fusion을 위한 feature extraction 메서드"""

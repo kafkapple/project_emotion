@@ -14,14 +14,17 @@ class PretrainedImageModel(pl.LightningModule):
         self.save_hyperparameters()
         self.config = config
         
-        # 모델 초기화
-        self.model = self._init_model()
+        # dtype 설정
+        self._model_dtype = torch.float32 if config.settings.precision == "32" else torch.float16
+        
+        # 모델 초기화 시 dtype 적용
+        self.model = self._init_model().to(dtype=self._model_dtype)
         
         # 분류기 초기화
         self.classifier = self._init_classifier()
         
         # Loss function 초기화
-        self.criterion = self._init_criterion()
+        self.criterion = self._init_criterion().to(dtype=self._model_dtype)
         
         # Freezing 설정 적용
         if config.model.freeze.enabled:
@@ -123,14 +126,17 @@ class PretrainedImageModel(pl.LightningModule):
         logging.info(f"Frozen parameters: {total_params - trainable_params:,}\n")
     
     def forward(self, batch):
-        # 메모리 최화를 위한 배치 처리
-        with torch.cuda.amp.autocast():  # mixed precision 사용
-            images = batch['image']
-            features = self.model(images)
-            if isinstance(features, tuple):
-                features = features[0]
-            features = features.view(features.size(0), -1)
-            return self.classifier(features)
+        # 배치에서 이미지 데이터 추출 및 dtype 변환
+        x = batch['image'].to(dtype=self._model_dtype)
+        features = self.model(x)
+        
+        # EfficientNet 등에서 tuple을 반환하는 경우 처리
+        if isinstance(features, tuple):
+            features = features[0]
+            
+        # 분류기 입력을 위한 형태로 변환
+        features = features.view(features.size(0), -1)
+        return self.classifier(features)
     
     def _init_criterion(self):
         """Loss function 초기화"""
@@ -165,21 +171,33 @@ class PretrainedImageModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = self.criterion(outputs, batch["label"])
-        self.train_metrics.update(outputs, batch["label"])
+        
+        # 예측값 변환 후 update (validation_step과 동일하게)
+        preds = torch.argmax(outputs, dim=1)
+        self.train_metrics.update(preds, batch["label"])
+        
         self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = self.criterion(outputs, batch["label"])
-        self.val_metrics.update(outputs, batch["label"])
+        
+        # 예측값 업데이트
+        preds = torch.argmax(outputs, dim=1)
+        self.val_metrics.update(preds, batch["label"])  # outputs -> preds로 변경
+        
         self.log("validation/loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
     
     def test_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = self.criterion(outputs, batch["label"])
-        self.test_metrics.update(outputs, batch["label"])
+        
+        # 예측값 업데이트
+        preds = torch.argmax(outputs, dim=1)
+        self.test_metrics.update(preds, batch["label"])  # outputs -> preds로 변경
+        
         self.log("test/loss", loss, prog_bar=True, on_epoch=True)
         return loss
     
@@ -206,38 +224,53 @@ class PretrainedImageModel(pl.LightningModule):
         return [optimizer], [scheduler]
     
     def on_train_epoch_end(self):
+        # Classification report 출력 (리셋 전에)
+        current_epoch = self.current_epoch + 1
+        logging.info(f"\nTrain Epoch {current_epoch} Classification Report:")
+        logging.info(self.train_metrics.get_classification_report())
+        
+        # 메트릭 계산 및 로깅
         metrics = self.train_metrics.compute(prefix="train")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
-        self.train_metrics.reset()
         
+        # 메트릭 리셋
+        self.train_metrics.reset()
+    
     def on_validation_epoch_end(self):
+        # Classification report 출력 (리셋 전에)
+        current_epoch = self.current_epoch + 1
+        logging.info(f"\nValidation Epoch {current_epoch} Classification Report:")
+        logging.info(self.val_metrics.get_classification_report())
+        
+        # 메트릭 계산 및 로깅
         metrics = self.val_metrics.compute(prefix="validation")
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True, sync_dist=True)
+        
+        # 메트릭 리셋
         self.val_metrics.reset()
     
     def on_test_epoch_end(self):
-        metrics = self.test_metrics.compute(prefix="test_")
+        metrics = self.test_metrics.compute(prefix="test")
+        self.test_metrics.reset()
         
         # 모든 메트릭스 로깅
         for name, value in metrics.items():
             self.log(name, value, prog_bar=True)
         
-        self.test_metrics.reset()
-        
-        # test_loss 대신 f1 score 반환
+        # 주요 메트릭 반환
         return {
-            "test_macro_f1": metrics["test_macro_f1"],
-            "test_weighted_f1": metrics["test_weighted_f1"],
-            "test_accuracy": metrics["test_accuracy"]
+            "test/macro_f1": metrics["test/macro_f1"],
+            "test/weighted_f1": metrics["test/weighted_f1"],
+            "test/accuracy": metrics["test/accuracy"]
         }
     
     def on_train_epoch_start(self):
-        self.train_metrics.set_epoch(self.current_epoch)
+        self.train_metrics.set_epoch(self.current_epoch + 1)
     
     def on_validation_epoch_start(self):
-        self.val_metrics.set_epoch(self.current_epoch)
+        self.val_metrics.set_epoch(self.current_epoch + 1)
     
     def on_test_epoch_start(self):
-        self.test_metrics.set_epoch(self.current_epoch) 
+        self.test_metrics.set_epoch(self.current_epoch + 1) 

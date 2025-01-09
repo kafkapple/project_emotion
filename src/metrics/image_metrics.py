@@ -11,8 +11,11 @@ class ImageEmotionMetrics(BaseEmotionMetrics):
 
     def get_classification_report(self) -> str:
         """현재 에포크의 classification report 반환"""
-        y_true = torch.cat(self.targets).cpu().numpy()
-        y_pred = torch.cat(self.preds).cpu().numpy()
+        if not self.all_labels or not self.all_preds:
+            return "No predictions available"
+        
+        y_true = torch.tensor(self.all_labels).cpu().numpy()
+        y_pred = torch.tensor(self.all_preds).cpu().numpy()
         
         return classification_report(
             y_true, 
@@ -23,17 +26,17 @@ class ImageEmotionMetrics(BaseEmotionMetrics):
 
     def compute(self, prefix: str = "") -> Dict[str, torch.Tensor]:
         """모든 메트릭 계산"""
-        if not self.targets or not self.preds:
+        if not self.all_labels or not self.all_preds:
             return {}
         
-        y_true = torch.cat(self.targets)
-        y_pred = torch.cat(self.preds)
+        y_true = torch.tensor(self.all_labels)
+        y_pred = torch.tensor(self.all_preds)
         
         # 기본 메트릭 계산
         phase = prefix.rstrip('_/')  # train_, val_, test_ 제거
         metrics = {
             f"{phase}/accuracy": accuracy_score(y_true.cpu(), y_pred.cpu()),
-            f"{phase}/f1": f1_score(y_true.cpu(), y_pred.cpu(), average='macro'),
+            f"{phase}/macro_f1": f1_score(y_true.cpu(), y_pred.cpu(), average='macro'),
             f"{phase}/weighted_f1": f1_score(y_true.cpu(), y_pred.cpu(), average='weighted')
         }
         

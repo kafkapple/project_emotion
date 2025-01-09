@@ -6,4 +6,5 @@ metrics:
     monitor: "loss"
   test:
     metrics: ["loss", "accuracy", "f1", "precision", "recall"]
+    monitor_metrics: ["f1", "accuracy", "loss"]
     main_metric: "f1" 
